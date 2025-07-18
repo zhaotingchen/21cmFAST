@@ -78,9 +78,10 @@ void set_halo_properties(double halo_mass, double M_turn_a, double M_turn_m,
     }
 
     // no rng for escape fraction yet
-    fesc = fmin(consts->fesc_10 * pow(halo_mass / 1e10, consts->alpha_esc), 1);
+    double redshift_factor = pow((1.0 + consts->redshift) / 8.0, consts->beta_esc);
+    fesc = fmin(consts->fesc_10 * pow(halo_mass / 1e10, consts->alpha_esc) * redshift_factor, 1);
     if (astro_options_global->USE_MINI_HALOS)
-        fesc_mini = fmin(consts->fesc_7 * pow(halo_mass / 1e7, consts->alpha_esc), 1);
+        fesc_mini = fmin(consts->fesc_7 * pow(halo_mass / 1e7, consts->alpha_esc) * redshift_factor, 1);
 
     n_ion_sample =
         stellar_mass * consts->pop2_ion * fesc + stellar_mass_mini * consts->pop3_ion * fesc_mini;

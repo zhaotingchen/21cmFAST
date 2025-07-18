@@ -17,6 +17,7 @@ F_ESC7_MINI = -2.22
 ALPHA_STAR = 0.5
 ALPHA_STAR_MINI = 0.0
 ALPHA_ESC = -0.3
+BETA_ESC = 0.0
 M_TURN = 5.0 # not included in Munoz21, so we set very low
 t_STAR = 0.5
 L_X = 40.5

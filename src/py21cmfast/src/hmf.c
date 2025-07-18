@@ -69,6 +69,7 @@ struct parameters_gsl_MF_integrals {
     // Nion additions
     double f_esc_norm;
     double alpha_esc;
+    double beta_esc;
     double Mlim_esc;
 
     // Minihalo additions
@@ -358,17 +359,19 @@ double nion_fraction(double lnM, void *param_struct) {
     struct parameters_gsl_MF_integrals p = *(struct parameters_gsl_MF_integrals *)param_struct;
     double Fstar = log_scaling_PL_limit(lnM, p.f_star_norm, p.alpha_star, 10 * LN10, p.Mlim_star);
     double Fesc = log_scaling_PL_limit(lnM, p.f_esc_norm, p.alpha_esc, 10 * LN10, p.Mlim_esc);
+    double redshift_factor = log(pow((1.0 + p.redshift) / 8.0, p.beta_esc));
 
-    return exp(Fstar + Fesc - p.Mturn_acg / exp(lnM) + lnM);
+    return exp(Fstar + Fesc + redshift_factor - p.Mturn_acg / exp(lnM) + lnM);
 }
 
 double nion_fraction_mini(double lnM, void *param_struct) {
     struct parameters_gsl_MF_integrals p = *(struct parameters_gsl_MF_integrals *)param_struct;
     double Fstar = log_scaling_PL_limit(lnM, p.f_star_norm, p.alpha_star, 7 * LN10, p.Mlim_star);
     double Fesc = log_scaling_PL_limit(lnM, p.f_esc_norm, p.alpha_esc, 7 * LN10, p.Mlim_esc);
+    double redshift_factor = log(pow((1.0 + p.redshift) / 8.0, p.beta_esc));
     double M = exp(lnM);
 
-    return exp(Fstar + Fesc - M / p.Mturn_upper - p.Mturn_mcg / M + lnM);
+    return exp(Fstar + Fesc + redshift_factor - M / p.Mturn_upper - p.Mturn_mcg / M + lnM);
 }
 
 // Due to the log(1+Mstar) in the metallicity, this is hard to simplify into log-space
@@ -849,6 +852,7 @@ double Nion_General(double z, double lnM_Min, double lnM_Max, double MassTurnove
         .Mturn_acg = MassTurnover,
         .alpha_star = sc->alpha_star,
         .alpha_esc = sc->alpha_esc,
+        .beta_esc = sc->beta_esc,
         .f_star_norm = log(sc->fstar_10),
         .f_esc_norm = log(sc->fesc_10),
         .Mlim_star = log(sc->Mlim_Fstar),
@@ -868,6 +872,7 @@ double Nion_General_MINI(double z, double lnM_Min, double lnM_Max, double MassTu
         .Mturn_upper = sc->acg_thresh,
         .alpha_star = sc->alpha_star_mini,
         .alpha_esc = sc->alpha_esc,
+        .beta_esc = sc->beta_esc,
         .f_star_norm = log(sc->fstar_7),
         .f_esc_norm = log(sc->fesc_7),
         .Mlim_star = log(sc->Mlim_Fstar_mini),
@@ -891,6 +896,7 @@ double Xray_General(double z, double lnM_Min, double lnM_Max, double mturn_acg, 
         .Mturn_upper = sc->acg_thresh,
         .alpha_star = sc->alpha_star,
         .alpha_esc = sc->alpha_star_mini,  // re-using f_esc for minihalos
+        .beta_esc = sc->beta_esc,
         .f_star_norm = log(sc->fstar_10),
         .f_esc_norm = log(sc->fstar_7),
         .Mlim_star = log(sc->Mlim_Fstar),
@@ -961,6 +967,7 @@ double Nion_ConditionalM_MINI(double growthf, double lnM1, double lnM2, double l
         .Mturn_upper = sc->acg_thresh,
         .alpha_star = sc->alpha_star_mini,
         .alpha_esc = sc->alpha_esc,
+        .beta_esc = sc->beta_esc,
         .f_star_norm = log(sc->fstar_7),
         .f_esc_norm = log(sc->fesc_7),
         .Mlim_star = log(sc->Mlim_Fstar_mini),
@@ -999,6 +1006,7 @@ double Nion_ConditionalM(double growthf, double lnM1, double lnM2, double lnM_co
         .Mturn_acg = MassTurnover,
         .alpha_star = sc->alpha_star,
         .alpha_esc = sc->alpha_esc,
+        .beta_esc = sc->beta_esc,
         .f_star_norm = log(sc->fstar_10),
         .f_esc_norm = log(sc->fesc_10),
         .Mlim_star = log(sc->Mlim_Fstar),
@@ -1039,6 +1047,7 @@ double Xray_ConditionalM(double redshift, double growthf, double lnM1, double ln
         .Mturn_upper = sc->acg_thresh,
         .alpha_star = sc->alpha_star,
         .alpha_esc = sc->alpha_star_mini,  // re-using f_esc for minihalos
+        .beta_esc = sc->beta_esc,
         .f_star_norm = log(sc->fstar_10),
         .f_esc_norm = log(sc->fstar_7),
         .Mlim_star = log(sc->Mlim_Fstar),
