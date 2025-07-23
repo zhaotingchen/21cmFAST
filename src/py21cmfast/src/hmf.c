@@ -359,9 +359,9 @@ double nion_fraction(double lnM, void *param_struct) {
     struct parameters_gsl_MF_integrals p = *(struct parameters_gsl_MF_integrals *)param_struct;
     double Fstar = log_scaling_PL_limit(lnM, p.f_star_norm, p.alpha_star, 10 * LN10, p.Mlim_star);
     double Fesc = log_scaling_PL_limit(lnM, p.f_esc_norm, p.alpha_esc, 10 * LN10, p.Mlim_esc);
-    double Zesc = log(pow((1 + p.redshift) / 8.0, p.beta_esc));
+    // Zesc factor removed - it should be factored out of the integral since it's redshift-dependent only
 
-    return exp(Fstar + Fesc + Zesc - p.Mturn_acg / exp(lnM) + lnM);
+    return exp(Fstar + Fesc - p.Mturn_acg / exp(lnM) + lnM);
 }
 
 double nion_fraction_mini(double lnM, void *param_struct) {
@@ -879,7 +879,9 @@ double Nion_General_MINI(double z, double lnM_Min, double lnM_Max, double MassTu
         .HMF = matter_options_global->HMF,
         .gamma_type = 4,
     };
-    return IntegratedNdM(lnM_Min, lnM_Max, params, &u_nion_integrand_mini, 0);
+    // z factor can be taken out of the integral
+    double Zesc = pow((1 + z) / 8.0, sc->beta_esc);
+    return Zesc * IntegratedNdM(lnM_Min, lnM_Max, params, &u_nion_integrand_mini, 0);
 }
 
 double Xray_General(double z, double lnM_Min, double lnM_Max, double mturn_acg, double mturn_mcg,
@@ -960,6 +962,7 @@ double Nion_ConditionalM_MINI(double growthf, double lnM1, double lnM2, double l
                               double sigma2, double delta2, double MassTurnover,
                               struct ScalingConstants *sc, int method) {
     struct parameters_gsl_MF_integrals params = {
+        .redshift = sc->redshift,
         .growthf = growthf,
         .Mturn_mcg = MassTurnover,
         .Mturn_upper = sc->acg_thresh,
@@ -974,6 +977,7 @@ double Nion_ConditionalM_MINI(double growthf, double lnM1, double lnM2, double l
         .delta = delta2,
         .gamma_type = -4,
     };
+    double Zesc = pow((1 + sc->redshift) / 8.0, sc->beta_esc);
 
     if (lnM1 >= lnM_cond) return 0.;
     // return 1 halo at the condition mass if delta is exceeded
@@ -983,7 +987,7 @@ double Nion_ConditionalM_MINI(double growthf, double lnM1, double lnM2, double l
         // this limit is not ideal, but covers floating point errors when we set lnM2==log(M_cond)
         // NOTE: condition mass is used as if it were Lagrangian (no 1+delta)
         if (lnM_cond * (1 - FRACT_FLOAT_ERR) <= lnM2)
-            return nion_fraction_mini(lnM_cond, &params) / exp(lnM_cond);
+            return Zesc * nion_fraction_mini(lnM_cond, &params) / exp(lnM_cond);
         else
             return 0.;
     }
@@ -992,7 +996,8 @@ double Nion_ConditionalM_MINI(double growthf, double lnM1, double lnM2, double l
     // NOTE: it's possible we may want to use another default
     if (params.HMF != 0 && params.HMF != 1 && params.HMF != 4) params.HMF = 0;
 
-    return IntegratedNdM(lnM1, lnM2, params, &c_nion_integrand_mini, method);
+    // z factor can be taken out of the integral
+    return Zesc * IntegratedNdM(lnM1, lnM2, params, &c_nion_integrand_mini, method);
 }
 
 double Nion_ConditionalM(double growthf, double lnM1, double lnM2, double lnM_cond, double sigma2,
@@ -1020,7 +1025,7 @@ double Nion_ConditionalM(double growthf, double lnM1, double lnM2, double lnM_co
         // this limit is not ideal, but covers floating point errors when we set lnM2==log(M_cond)
         // NOTE: condition mass is used as if it were Lagrangian (no 1+delta)
         if (lnM_cond * (1 - FRACT_FLOAT_ERR) <= lnM2)
-            return nion_fraction(lnM_cond, &params) / exp(lnM_cond);
+            return Zesc * nion_fraction(lnM_cond, &params) / exp(lnM_cond);
 
         return 0.;
     }
