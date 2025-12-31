@@ -316,7 +316,7 @@ def calibrate_photon_cons(
     logger.info("Calculating photon conservation zstart")
     z = _calc_zstart_photon_cons()
 
-    fast_node_redshifts = [z]
+    fast_node_redshifts = []
 
     # NOTE: Not checking any redshift consistency for the calibration run
     #   Since the z-step is Q-dependent, we can't predict the redshifts
@@ -343,7 +343,8 @@ def calibrate_photon_cons(
 
         mean_nf = np.mean(ib2.get("neutral_fraction"))
 
-        # Save mean/global quantities
+        # Save mean/global quantities - store the redshift we computed at, not the next one
+        fast_node_redshifts.append(z)
         neutral_fraction_photon_cons.append(mean_nf)
 
         # Can speed up sampling in regions where the evolution is slower
@@ -357,8 +358,6 @@ def calibrate_photon_cons(
         ib = ib2
         if inputs.astro_options.USE_MINI_HALOS:
             prev_perturb = this_perturb
-
-        fast_node_redshifts.append(z)
 
     fast_node_redshifts = np.array(fast_node_redshifts[::-1])
     neutral_fraction_photon_cons = np.array(neutral_fraction_photon_cons[::-1])
