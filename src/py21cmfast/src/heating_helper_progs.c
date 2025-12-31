@@ -93,7 +93,6 @@ void destruct_heat() {
 double T_RECFAST(float z, int flag) {
     double ans;
     static double zt[RECFAST_NPTS], TK[RECFAST_NPTS];
-    static gsl_interp_accel *acc;
     static gsl_spline *spline;
     static int trecfast_initialized = 0;  // Thread-safety flag
     float currz, currTK, trash;
@@ -121,25 +120,16 @@ double T_RECFAST(float z, int flag) {
                 }
                 fclose(F);
 
-                // Set up spline table
-                acc = gsl_interp_accel_alloc();
-                if (acc == NULL) {
-                    LOG_ERROR("T_RECFAST: Failed to allocate GSL interpolation accelerator.");
-                    Throw(MemoryAllocError);
-                }
+                // Set up spline table (no shared accelerator - each eval creates its own)
                 spline = gsl_spline_alloc(gsl_interp_cspline, RECFAST_NPTS);
                 if (spline == NULL) {
-                    gsl_interp_accel_free(acc);
-                    acc = NULL;
                     LOG_ERROR("T_RECFAST: Failed to allocate GSL spline.");
                     Throw(MemoryAllocError);
                 }
                 int gsl_status = gsl_spline_init(spline, zt, TK, RECFAST_NPTS);
                 if (gsl_status != 0) {
                     gsl_spline_free(spline);
-                    gsl_interp_accel_free(acc);
                     spline = NULL;
-                    acc = NULL;
                     LOG_ERROR("T_RECFAST: Failed to initialize GSL spline.");
                     CATCH_GSL_ERROR(gsl_status);
                 }
@@ -148,7 +138,7 @@ double T_RECFAST(float z, int flag) {
         }
 
         // Verify initialization completed
-        if (!trecfast_initialized || spline == NULL || acc == NULL) {
+        if (!trecfast_initialized || spline == NULL) {
             LOG_ERROR("T_RECFAST: Initialization failed or incomplete.");
             return -1;
         }
@@ -158,36 +148,37 @@ double T_RECFAST(float z, int flag) {
 
     if (flag == 2) {
         // Free memory
-        gsl_spline_free(spline);
-        gsl_interp_accel_free(acc);
+        if (spline != NULL) {
+            gsl_spline_free(spline);
+            spline = NULL;
+        }
+        trecfast_initialized = 0;
         return 0;
     }
 
-    // Ensure initialization is complete before using spline
-    // Enter critical section to ensure memory visibility and wait for initialization if in progress
-#pragma omp critical(trecfast_init)
-    {
-        // This ensures we see the initialized state after another thread completes initialization
-        if (!trecfast_initialized || spline == NULL || acc == NULL) {
-            LOG_ERROR("T_RECFAST: Spline not initialized. Call with flag=1 first.");
-            Throw(ValueError);
-        }
+    // Check initialization (read of trecfast_initialized is atomic for int)
+    if (!trecfast_initialized || spline == NULL) {
+        LOG_ERROR("T_RECFAST: Spline not initialized. Call with flag=1 first.");
+        Throw(ValueError);
     }
 
-    // Now safe to use spline (initialization is complete)
     if (z > zt[RECFAST_NPTS - 1]) {  // Called at z>500! Bail out
         LOG_ERROR("Called T_RECFAST with z=%f.", z);
         Throw 1;
-    } else {  // Do spline
-        ans = gsl_spline_eval(spline, z, acc);
     }
+
+    // Use thread-local accelerator for thread-safe evaluation
+    // GSL accelerators cache lookup state and are NOT thread-safe when shared
+    gsl_interp_accel *acc = gsl_interp_accel_alloc();
+    ans = gsl_spline_eval(spline, z, acc);
+    gsl_interp_accel_free(acc);
+
     return ans;
 }
 
 // Ionization fraction from RECFAST. //
 double xion_RECFAST(float z, int flag) {
     static double zt[RECFAST_NPTS], xion[RECFAST_NPTS];
-    static gsl_interp_accel *acc;
     static gsl_spline *spline;
     static int xionrecfast_initialized = 0;  // Thread-safety flag
     float trash, currz, currxion;
@@ -217,25 +208,16 @@ double xion_RECFAST(float z, int flag) {
                 }
                 fclose(F);
 
-                // Set up spline table
-                acc = gsl_interp_accel_alloc();
-                if (acc == NULL) {
-                    LOG_ERROR("xion_RECFAST: Failed to allocate GSL interpolation accelerator.");
-                    Throw(MemoryAllocError);
-                }
+                // Set up spline table (no shared accelerator - each eval creates its own)
                 spline = gsl_spline_alloc(gsl_interp_cspline, RECFAST_NPTS);
                 if (spline == NULL) {
-                    gsl_interp_accel_free(acc);
-                    acc = NULL;
                     LOG_ERROR("xion_RECFAST: Failed to allocate GSL spline.");
                     Throw(MemoryAllocError);
                 }
                 int gsl_status = gsl_spline_init(spline, zt, xion, RECFAST_NPTS);
                 if (gsl_status != 0) {
                     gsl_spline_free(spline);
-                    gsl_interp_accel_free(acc);
                     spline = NULL;
-                    acc = NULL;
                     LOG_ERROR("xion_RECFAST: Failed to initialize GSL spline.");
                     CATCH_GSL_ERROR(gsl_status);
                 }
@@ -244,7 +226,7 @@ double xion_RECFAST(float z, int flag) {
         }
 
         // Verify initialization completed
-        if (!xionrecfast_initialized || spline == NULL || acc == NULL) {
+        if (!xionrecfast_initialized || spline == NULL) {
             LOG_ERROR("xion_RECFAST: Initialization failed or incomplete.");
             return -1;
         }
@@ -253,29 +235,31 @@ double xion_RECFAST(float z, int flag) {
     }
 
     if (flag == 2) {
-        gsl_spline_free(spline);
-        gsl_interp_accel_free(acc);
+        if (spline != NULL) {
+            gsl_spline_free(spline);
+            spline = NULL;
+        }
+        xionrecfast_initialized = 0;
         return 0;
     }
 
-    // Ensure initialization is complete before using spline
-    // Enter critical section to ensure memory visibility and wait for initialization if in progress
-#pragma omp critical(xionrecfast_init)
-    {
-        // This ensures we see the initialized state after another thread completes initialization
-        if (!xionrecfast_initialized || spline == NULL || acc == NULL) {
-            LOG_ERROR("xion_RECFAST: Spline not initialized. Call with flag=1 first.");
-            Throw(ValueError);
-        }
+    // Check initialization (read of xionrecfast_initialized is atomic for int)
+    if (!xionrecfast_initialized || spline == NULL) {
+        LOG_ERROR("xion_RECFAST: Spline not initialized. Call with flag=1 first.");
+        Throw(ValueError);
     }
 
-    // Now safe to use spline (initialization is complete)
     if (z > zt[RECFAST_NPTS - 1]) {  // Called at z>500! Bail out
         LOG_ERROR("Called xion_RECFAST with z=%f", z);
         Throw ValueError;
-    } else {  // Do spline
-        ans = gsl_spline_eval(spline, z, acc);
     }
+
+    // Use thread-local accelerator for thread-safe evaluation
+    // GSL accelerators cache lookup state and are NOT thread-safe when shared
+    gsl_interp_accel *acc = gsl_interp_accel_alloc();
+    ans = gsl_spline_eval(spline, z, acc);
+    gsl_interp_accel_free(acc);
+
     return ans;
 }
 
@@ -371,17 +355,11 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
 
     switch (flag) {
         case 2:
-            // Ensure initialization is complete before using arrays
-            // Enter critical section to ensure memory visibility and wait for initialization if in
-            // progress
-#pragma omp critical(spectral_emissivity_init)
-        {
+            // Check initialization (arrays are read-only after init, so no critical section needed)
             if (!spectral_emissivity_initialized) {
                 LOG_ERROR("spectral_emissivity: Arrays not initialized. Call with flag=1 first.");
                 Throw(ValueError);
             }
-        }
-            // Now safe to use arrays (initialization is complete)
             // For LW calculateion. New in v1.5, see...
             for (i = 1; i < (NSPEC_MAX - 1); i++) {
                 if ((nu_norm >= nu_n[i]) && (nu_norm < nu_n[i + 1])) {
@@ -447,17 +425,11 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
             return 0.0;
 
         default:
-            // Ensure initialization is complete before using arrays
-            // Enter critical section to ensure memory visibility and wait for initialization if in
-            // progress
-#pragma omp critical(spectral_emissivity_init)
-        {
+            // Check initialization (arrays are read-only after init, so no critical section needed)
             if (!spectral_emissivity_initialized) {
                 LOG_ERROR("spectral_emissivity: Arrays not initialized. Call with flag=1 first.");
                 Throw(ValueError);
             }
-        }
-            // Now safe to use arrays (initialization is complete)
             for (i = 1; i < (NSPEC_MAX - 1); i++) {
                 //    printf("checking between %e and %e\n", nu_n[i], nu_n[i+1]);
                 if ((nu_norm >= nu_n[i]) && (nu_norm < nu_n[i + 1])) {
@@ -1485,31 +1457,15 @@ double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
         return 0;
     }
 
+    // Check initialization (arrays are read-only after init, no critical section needed)
+    if (!lya_heating_initialized) {
+        LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
+        Throw(ValueError);
+    }
+
     if (flag == 2) {
-        // Ensure initialization is complete before using arrays
-        // Enter critical section to ensure memory visibility and wait for initialization if in
-        // progress
-#pragma omp critical(lya_heating_init)
-        {
-            if (!lya_heating_initialized) {
-                LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
-                Throw(ValueError);
-            }
-        }
-        // Now safe to use arrays (initialization is complete)
         ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, dEC);  // For Continuum Flux
     } else if (flag == 3) {
-        // Ensure initialization is complete before using arrays
-        // Enter critical section to ensure memory visibility and wait for initialization if in
-        // progress
-#pragma omp critical(lya_heating_init)
-        {
-            if (!lya_heating_initialized) {
-                LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
-                Throw(ValueError);
-            }
-        }
-        // Now safe to use arrays (initialization is complete)
         ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, dEI);  // For Injected Flux
     } else {
         LOG_ERROR("invalid flag passed to Energy_Lya_heating");

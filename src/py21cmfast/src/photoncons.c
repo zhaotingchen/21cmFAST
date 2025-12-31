@@ -764,13 +764,11 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                     determine_deltaz_for_photoncons();
                     photon_cons_allocated = true;
                 }
-                // Safety check: ensure spline is initialized before use (inside critical section
-                // for memory visibility)
-                if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL ||
-                    deltaz_spline_for_photoncons_acc == NULL) {
-                    LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
-                    Throw(PhotonConsError);
-                }
+            }
+            // Check that spline is initialized
+            if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL) {
+                LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
+                Throw(PhotonConsError);
             }
 
             // We have crossed the NF threshold for the photon conservation correction so now set to
@@ -778,9 +776,11 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             if (required_NF < PhotonConsAsymptoteTo) {
                 // This counts the number of times we have exceeded the extrapolated point and
                 // attempts to modify the delta z to try and make the function a little smoother
+                // Use thread-local accelerator for thread-safe evaluation
+                gsl_interp_accel *local_acc = gsl_interp_accel_alloc();
                 *absolute_delta_z =
-                    gsl_spline_eval(deltaz_spline_for_photoncons, PhotonConsAsymptoteTo,
-                                    deltaz_spline_for_photoncons_acc);
+                    gsl_spline_eval(deltaz_spline_for_photoncons, PhotonConsAsymptoteTo, local_acc);
+                gsl_interp_accel_free(local_acc);
 
                 new_counter = 0;
                 temp_redshift = *redshift;
@@ -812,8 +812,11 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 }
 
             } else {
-                *absolute_delta_z = gsl_spline_eval(deltaz_spline_for_photoncons, required_NF,
-                                                    deltaz_spline_for_photoncons_acc);
+                // Use thread-local accelerator for thread-safe evaluation
+                gsl_interp_accel *local_acc = gsl_interp_accel_alloc();
+                *absolute_delta_z =
+                    gsl_spline_eval(deltaz_spline_for_photoncons, required_NF, local_acc);
+                gsl_interp_accel_free(local_acc);
                 adjusted_redshift = (*redshift) - (*absolute_delta_z);
             }
         }
@@ -826,13 +829,11 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 determine_deltaz_for_photoncons();
                 photon_cons_allocated = true;
             }
-            // Safety check: ensure spline is initialized before use (inside critical section for
-            // memory visibility)
-            if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL ||
-                deltaz_spline_for_photoncons_acc == NULL) {
-                LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
-                Throw(PhotonConsError);
-            }
+        }
+        // Check that spline is initialized
+        if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL) {
+            LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
+            Throw(PhotonConsError);
         }
 
         // We have exceeded even the end-point of the extrapolation
@@ -877,20 +878,17 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
         } else {
             // Find the corresponding redshift for the calibration curve given the required neutral
             // fraction (filling factor) from the analytic expression
-            // Additional safety check before using spline (inside critical section for memory
-            // visibility)
-#pragma omp critical(photoncons_init)
-            {
-                if (deltaz_spline_for_photoncons == NULL ||
-                    deltaz_spline_for_photoncons_acc == NULL) {
-                    LOG_ERROR(
-                        "adjust_redshifts_for_photoncons: Spline is NULL when trying to evaluate.");
-                    Throw(PhotonConsError);
-                }
+            // Check that spline is initialized
+            if (deltaz_spline_for_photoncons == NULL) {
+                LOG_ERROR(
+                    "adjust_redshifts_for_photoncons: Spline is NULL when trying to evaluate.");
+                Throw(PhotonConsError);
             }
-            // Now safe to use spline (initialization is complete)
-            *absolute_delta_z = gsl_spline_eval(deltaz_spline_for_photoncons, (double)required_NF,
-                                                deltaz_spline_for_photoncons_acc);
+            // Use thread-local accelerator for thread-safe evaluation
+            gsl_interp_accel *local_acc = gsl_interp_accel_alloc();
+            *absolute_delta_z =
+                gsl_spline_eval(deltaz_spline_for_photoncons, (double)required_NF, local_acc);
+            gsl_interp_accel_free(local_acc);
             adjusted_redshift = (*redshift) - (*absolute_delta_z);
         }
     }
@@ -911,7 +909,10 @@ void Q_at_z(double z, double *splined_value) {
     } else if (z <= Zmin) {
         *splined_value = 1.;
     } else {
-        returned_value = gsl_spline_eval(Q_at_z_spline, z, Q_at_z_spline_acc);
+        // Use thread-local accelerator for thread-safe evaluation
+        gsl_interp_accel *acc = gsl_interp_accel_alloc();
+        returned_value = gsl_spline_eval(Q_at_z_spline, z, acc);
+        gsl_interp_accel_free(acc);
         *splined_value = returned_value;
     }
 }
@@ -932,7 +933,10 @@ void z_at_Q(double Q, double *splined_value) {
         //        Throw(ParameterError);
         Throw(PhotonConsError);
     } else {
-        returned_value = gsl_spline_eval(z_at_Q_spline, Q, z_at_Q_spline_acc);
+        // Use thread-local accelerator for thread-safe evaluation
+        gsl_interp_accel *acc = gsl_interp_accel_alloc();
+        returned_value = gsl_spline_eval(z_at_Q_spline, Q, acc);
+        gsl_interp_accel_free(acc);
         *splined_value = returned_value;
     }
 }
@@ -1015,14 +1019,20 @@ void initialise_NFHistory_spline(double *redshifts, double *NF_estimate, int NSp
 void z_at_NFHist(double xHI_Hist, double *splined_value) {
     float returned_value;
 
-    returned_value = gsl_spline_eval(NFHistory_spline, xHI_Hist, NFHistory_spline_acc);
+    // Use thread-local accelerator for thread-safe evaluation
+    gsl_interp_accel *acc = gsl_interp_accel_alloc();
+    returned_value = gsl_spline_eval(NFHistory_spline, xHI_Hist, acc);
+    gsl_interp_accel_free(acc);
     *splined_value = returned_value;
 }
 
 void NFHist_at_z(double z, double *splined_value) {
     float returned_value;
 
-    returned_value = gsl_spline_eval(z_NFHistory_spline, z, NFHistory_spline_acc);
+    // Use thread-local accelerator for thread-safe evaluation
+    gsl_interp_accel *acc = gsl_interp_accel_alloc();
+    returned_value = gsl_spline_eval(z_NFHistory_spline, z, acc);
+    gsl_interp_accel_free(acc);
     *splined_value = returned_value;
 }
 

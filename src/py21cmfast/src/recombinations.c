@@ -89,18 +89,18 @@ double splined_recombination_rate(double z_eff, double gamma12_bg) {
         }
     }
 
-    // Ensure initialization is complete before using splines
-    // Enter critical section to ensure memory visibility and wait for initialization if in progress
-#pragma omp critical(mhr_init)
-    {
-        if (!mhr_initialized || RR_spline[z_ct] == NULL || RR_acc[z_ct] == NULL) {
-            LOG_ERROR("splined_recombination_rate: MHR not initialized. Call init_MHR() first.");
-            Throw(ValueError);
-        }
+    // Check initialization (splines are read-only after init)
+    if (!mhr_initialized || RR_spline[z_ct] == NULL) {
+        LOG_ERROR("splined_recombination_rate: MHR not initialized. Call init_MHR() first.");
+        Throw(ValueError);
     }
 
-    // Now safe to use splines (initialization is complete)
-    return gsl_spline_eval(RR_spline[z_ct], lnGamma, RR_acc[z_ct]);
+    // Use thread-local accelerator for thread-safe evaluation
+    // GSL accelerators cache lookup state and are NOT thread-safe when shared
+    gsl_interp_accel *acc = gsl_interp_accel_alloc();
+    double result = gsl_spline_eval(RR_spline[z_ct], lnGamma, acc);
+    gsl_interp_accel_free(acc);
+    return result;
 }
 
 void init_MHR() {
@@ -385,18 +385,16 @@ void init_A_MHR() {
 }
 
 double splined_A_MHR(double x) {
-    // Ensure initialization is complete before using spline
-    // Enter critical section to ensure memory visibility (init happens in init_MHR which uses
-    // mhr_init)
-#pragma omp critical(mhr_init)
-    {
-        if (A_spline == NULL || A_acc == NULL) {
-            LOG_ERROR("splined_A_MHR: Spline not initialized. Call init_A_MHR() first.");
-            Throw(ValueError);
-        }
+    // Check initialization (spline is read-only after init)
+    if (A_spline == NULL) {
+        LOG_ERROR("splined_A_MHR: Spline not initialized. Call init_A_MHR() first.");
+        Throw(ValueError);
     }
-    // Now safe to use spline (initialization is complete)
-    return gsl_spline_eval(A_spline, x, A_acc);
+    // Use thread-local accelerator for thread-safe evaluation
+    gsl_interp_accel *acc = gsl_interp_accel_alloc();
+    double result = gsl_spline_eval(A_spline, x, acc);
+    gsl_interp_accel_free(acc);
+    return result;
 }
 
 void free_A_MHR() {
@@ -463,18 +461,16 @@ void init_C_MHR() {
 }
 
 double splined_C_MHR(double x) {
-    // Ensure initialization is complete before using spline
-    // Enter critical section to ensure memory visibility (init happens in init_MHR which uses
-    // mhr_init)
-#pragma omp critical(mhr_init)
-    {
-        if (C_spline == NULL || C_acc == NULL) {
-            LOG_ERROR("splined_C_MHR: Spline not initialized. Call init_C_MHR() first.");
-            Throw(ValueError);
-        }
+    // Check initialization (spline is read-only after init)
+    if (C_spline == NULL) {
+        LOG_ERROR("splined_C_MHR: Spline not initialized. Call init_C_MHR() first.");
+        Throw(ValueError);
     }
-    // Now safe to use spline (initialization is complete)
-    return gsl_spline_eval(C_spline, x, C_acc);
+    // Use thread-local accelerator for thread-safe evaluation
+    gsl_interp_accel *acc = gsl_interp_accel_alloc();
+    double result = gsl_spline_eval(C_spline, x, acc);
+    gsl_interp_accel_free(acc);
+    return result;
 }
 
 void free_C_MHR() {
@@ -534,18 +530,16 @@ void init_beta_MHR() {
 }
 
 double splined_beta_MHR(double x) {
-    // Ensure initialization is complete before using spline
-    // Enter critical section to ensure memory visibility (init happens in init_MHR which uses
-    // mhr_init)
-#pragma omp critical(mhr_init)
-    {
-        if (beta_spline == NULL || beta_acc == NULL) {
-            LOG_ERROR("splined_beta_MHR: Spline not initialized. Call init_beta_MHR() first.");
-            Throw(ValueError);
-        }
+    // Check initialization (spline is read-only after init)
+    if (beta_spline == NULL) {
+        LOG_ERROR("splined_beta_MHR: Spline not initialized. Call init_beta_MHR() first.");
+        Throw(ValueError);
     }
-    // Now safe to use spline (initialization is complete)
-    return gsl_spline_eval(beta_spline, x, beta_acc);
+    // Use thread-local accelerator for thread-safe evaluation
+    gsl_interp_accel *acc = gsl_interp_accel_alloc();
+    double result = gsl_spline_eval(beta_spline, x, acc);
+    gsl_interp_accel_free(acc);
+    return result;
 }
 
 void free_beta_MHR() {

@@ -198,14 +198,18 @@ double transfer_function_CLASS(double k, int flag_int, int flag_dv) {
             LOG_ERROR("Invalid flag_dv %d passed to transfer_function_CLASS", flag_dv);
             Throw(ValueError);
         }
-    } else {                 // Do spline
+    } else {  // Do spline
+        // Use thread-local accelerator for thread-safe evaluation
+        // GSL accelerators cache lookup state and are NOT thread-safe when shared
+        gsl_interp_accel *acc = gsl_interp_accel_alloc();
         if (flag_dv == 0) {  // output is density
-            ans = gsl_spline_eval(spline_density, k, acc_density);
+            ans = gsl_spline_eval(spline_density, k, acc);
         } else if (flag_dv == 1) {  // output is relative velocity
-            ans = gsl_spline_eval(spline_vcb, k, acc_vcb);
+            ans = gsl_spline_eval(spline_vcb, k, acc);
         } else {
             ans = 0.0;  // neither densities not velocities?
         }
+        gsl_interp_accel_free(acc);
     }
 
     return ans / k / k;

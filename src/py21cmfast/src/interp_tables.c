@@ -1136,7 +1136,11 @@ double EvaluateSigmaInverse(double sigma) {
         LOG_ERROR("Cannot currently do sigma inverse without USE_INTERPOLATION_TABLES");
         Throw(ValueError);
     }
-    return gsl_spline_eval(Sigma_inv_table, sigma, Sigma_inv_table_acc);
+    // Use thread-local accelerator for thread-safe evaluation
+    gsl_interp_accel *acc = gsl_interp_accel_alloc();
+    double result = gsl_spline_eval(Sigma_inv_table, sigma, acc);
+    gsl_interp_accel_free(acc);
+    return result;
 }
 
 void initialiseSigmaMInterpTable(float M_min, float M_max) {
