@@ -455,29 +455,42 @@ void determine_deltaz_for_photoncons() {
 
         z_analytic = temp;
 
-        // Validate z_cal and z_analytic before computing deltaz
-        if (!isfinite(z_cal) || isnan(z_cal)) {
+        // Validate z_cal and z_analytic before computing deltaz using bit-pattern check
+        unsigned long long *z_cal_bits = (unsigned long long *)&z_cal;
+        unsigned long long *z_analytic_bits = (unsigned long long *)&z_analytic;
+        int z_cal_is_nan = ((*z_cal_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                            (*z_cal_bits & 0x000fffffffffffffULL) != 0);
+        int z_analytic_is_nan =
+            ((*z_analytic_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+             (*z_analytic_bits & 0x000fffffffffffffULL) != 0);
+
+        if (z_cal_is_nan) {
             LOG_ERROR(
-                "determine_deltaz_for_photoncons: z_at_NFHist returned non-finite z_cal = %f for "
-                "NF_sample = %f (i = %d)",
-                z_cal, NF_sample, i);
+                "determine_deltaz_for_photoncons: z_at_NFHist returned NaN z_cal = %f "
+                "(bits=0x%016llx) "
+                "for NF_sample = %f (i = %d)",
+                z_cal, *z_cal_bits, NF_sample, i);
         }
-        if (!isfinite(z_analytic) || isnan(z_analytic)) {
+        if (z_analytic_is_nan) {
             LOG_ERROR(
-                "determine_deltaz_for_photoncons: z_at_Q returned non-finite z_analytic = %f for "
-                "NF_sample = %f (i = %d)",
-                z_analytic, NF_sample, i);
+                "determine_deltaz_for_photoncons: z_at_Q returned NaN z_analytic = %f "
+                "(bits=0x%016llx) "
+                "for NF_sample = %f (i = %d)",
+                z_analytic, *z_analytic_bits, NF_sample, i);
         }
 
         deltaz[i + 1 + N_extrapolated] = fabs(z_cal - z_analytic);
         NeutralFractions[i + 1 + N_extrapolated] = NF_sample;
 
-        // Check if deltaz is NaN after computation
-        if (!isfinite(deltaz[i + 1 + N_extrapolated]) || isnan(deltaz[i + 1 + N_extrapolated])) {
+        // Check if deltaz is NaN after computation using bit-pattern check
+        unsigned long long *dz_bits = (unsigned long long *)&deltaz[i + 1 + N_extrapolated];
+        int dz_is_nan = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                         (*dz_bits & 0x000fffffffffffffULL) != 0);
+        if (dz_is_nan) {
             LOG_ERROR(
-                "determine_deltaz_for_photoncons: deltaz[%d] = %f is non-finite (z_cal = %f, "
-                "z_analytic = %f, NF_sample = %f)",
-                i + 1 + N_extrapolated, deltaz[i + 1 + N_extrapolated], z_cal, z_analytic,
+                "determine_deltaz_for_photoncons: deltaz[%d] = %f (bits=0x%016llx) is NaN "
+                "(z_cal = %f, z_analytic = %f, NF_sample = %f)",
+                i + 1 + N_extrapolated, deltaz[i + 1 + N_extrapolated], *dz_bits, z_cal, z_analytic,
                 NF_sample);
         }
     }
@@ -499,15 +512,28 @@ void determine_deltaz_for_photoncons() {
         deltaz_spline_for_photoncons =
             gsl_spline_alloc(gsl_interp_linear, N_NFsamples + N_extrapolated + 1);
 
-        // Validate spline data for NaN/inf before initialization
+        // Validate spline data for NaN/inf before initialization using bit-pattern check
         int has_nan_data = 0;
         for (i = 0; i < N_NFsamples + N_extrapolated + 1; i++) {
-            if (!isfinite(deltaz[i]) || isnan(deltaz[i]) || !isfinite(NeutralFractions[i]) ||
-                isnan(NeutralFractions[i])) {
+            // Use bit-pattern check for NaN detection (isfinite/isnan may fail)
+            unsigned long long *nf_bits = (unsigned long long *)&NeutralFractions[i];
+            unsigned long long *dz_bits = (unsigned long long *)&deltaz[i];
+            int nf_is_nan = ((*nf_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                             (*nf_bits & 0x000fffffffffffffULL) != 0);
+            int dz_is_nan = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                             (*dz_bits & 0x000fffffffffffffULL) != 0);
+            int nf_is_inf = ((*nf_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                             (*nf_bits & 0x000fffffffffffffULL) == 0);
+            int dz_is_inf = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                             (*dz_bits & 0x000fffffffffffffULL) == 0);
+
+            if (nf_is_nan || dz_is_nan || nf_is_inf || dz_is_inf) {
                 LOG_ERROR(
                     "determine_deltaz_for_photoncons: Invalid spline data at index %d: "
-                    "NeutralFractions[%d] = %f, deltaz[%d] = %f",
-                    i, i, NeutralFractions[i], i, deltaz[i]);
+                    "NeutralFractions[%d] = %f (bits=0x%016llx, is_nan=%d, is_inf=%d), "
+                    "deltaz[%d] = %f (bits=0x%016llx, is_nan=%d, is_inf=%d)",
+                    i, i, NeutralFractions[i], *nf_bits, nf_is_nan, nf_is_inf, i, deltaz[i],
+                    *dz_bits, dz_is_nan, dz_is_inf);
                 has_nan_data = 1;
             }
         }
@@ -752,16 +778,30 @@ void determine_deltaz_for_photoncons() {
 
     gsl_set_error_handler_off();
     int gsl_status;
-    // Validate spline data for NaN/inf before initialization (for smoothing path)
+    // Validate spline data for NaN/inf before initialization (for smoothing path) using bit-pattern
+    // check
     int has_nan_data = 0;
     for (i = 0; i < N_NFsamples + N_extrapolated + 1; i++) {
-        if (!isfinite(deltaz[i]) || isnan(deltaz[i]) || !isfinite(NeutralFractions[i]) ||
-            isnan(NeutralFractions[i])) {
+        // Use bit-pattern check for NaN detection (isfinite/isnan may fail)
+        unsigned long long *nf_bits = (unsigned long long *)&NeutralFractions[i];
+        unsigned long long *dz_bits = (unsigned long long *)&deltaz[i];
+        int nf_is_nan = ((*nf_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                         (*nf_bits & 0x000fffffffffffffULL) != 0);
+        int dz_is_nan = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                         (*dz_bits & 0x000fffffffffffffULL) != 0);
+        int nf_is_inf = ((*nf_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                         (*nf_bits & 0x000fffffffffffffULL) == 0);
+        int dz_is_inf = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                         (*dz_bits & 0x000fffffffffffffULL) == 0);
+
+        if (nf_is_nan || dz_is_nan || nf_is_inf || dz_is_inf) {
             LOG_ERROR(
                 "determine_deltaz_for_photoncons: Invalid spline data at index %d (after "
                 "smoothing): "
-                "NeutralFractions[%d] = %f, deltaz[%d] = %f",
-                i, i, NeutralFractions[i], i, deltaz[i]);
+                "NeutralFractions[%d] = %f (bits=0x%016llx, is_nan=%d, is_inf=%d), "
+                "deltaz[%d] = %f (bits=0x%016llx, is_nan=%d, is_inf=%d)",
+                i, i, NeutralFractions[i], *nf_bits, nf_is_nan, nf_is_inf, i, deltaz[i], *dz_bits,
+                dz_is_nan, dz_is_inf);
             has_nan_data = 1;
         }
     }
