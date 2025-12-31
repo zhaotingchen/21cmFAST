@@ -455,8 +455,31 @@ void determine_deltaz_for_photoncons() {
 
         z_analytic = temp;
 
+        // Validate z_cal and z_analytic before computing deltaz
+        if (!isfinite(z_cal) || isnan(z_cal)) {
+            LOG_ERROR(
+                "determine_deltaz_for_photoncons: z_at_NFHist returned non-finite z_cal = %f for "
+                "NF_sample = %f (i = %d)",
+                z_cal, NF_sample, i);
+        }
+        if (!isfinite(z_analytic) || isnan(z_analytic)) {
+            LOG_ERROR(
+                "determine_deltaz_for_photoncons: z_at_Q returned non-finite z_analytic = %f for "
+                "NF_sample = %f (i = %d)",
+                z_analytic, NF_sample, i);
+        }
+
         deltaz[i + 1 + N_extrapolated] = fabs(z_cal - z_analytic);
         NeutralFractions[i + 1 + N_extrapolated] = NF_sample;
+
+        // Check if deltaz is NaN after computation
+        if (!isfinite(deltaz[i + 1 + N_extrapolated]) || isnan(deltaz[i + 1 + N_extrapolated])) {
+            LOG_ERROR(
+                "determine_deltaz_for_photoncons: deltaz[%d] = %f is non-finite (z_cal = %f, "
+                "z_analytic = %f, NF_sample = %f)",
+                i + 1 + N_extrapolated, deltaz[i + 1 + N_extrapolated], z_cal, z_analytic,
+                NF_sample);
+        }
     }
 
     // Determining the end-point (lowest neutral fraction) for the photon non-conservation
@@ -475,6 +498,30 @@ void determine_deltaz_for_photoncons() {
         deltaz_spline_for_photoncons_acc = gsl_interp_accel_alloc();
         deltaz_spline_for_photoncons =
             gsl_spline_alloc(gsl_interp_linear, N_NFsamples + N_extrapolated + 1);
+
+        // Validate spline data for NaN/inf before initialization
+        int has_nan_data = 0;
+        for (i = 0; i < N_NFsamples + N_extrapolated + 1; i++) {
+            if (!isfinite(deltaz[i]) || isnan(deltaz[i]) || !isfinite(NeutralFractions[i]) ||
+                isnan(NeutralFractions[i])) {
+                LOG_ERROR(
+                    "determine_deltaz_for_photoncons: Invalid spline data at index %d: "
+                    "NeutralFractions[%d] = %f, deltaz[%d] = %f",
+                    i, i, NeutralFractions[i], i, deltaz[i]);
+                has_nan_data = 1;
+            }
+        }
+        if (has_nan_data) {
+            LOG_ERROR(
+                "determine_deltaz_for_photoncons: Spline data contains NaN/inf values. "
+                "Cannot initialize spline.");
+            // Log all data points for debugging
+            for (i = 0; i < N_NFsamples + N_extrapolated + 1; i++) {
+                LOG_ERROR("Spline data[%d]: NF = %f, deltaz = %f", i, NeutralFractions[i],
+                          deltaz[i]);
+            }
+            Throw(PhotonConsError);
+        }
 
         gsl_set_error_handler_off();
         int gsl_status;
@@ -705,6 +752,32 @@ void determine_deltaz_for_photoncons() {
 
     gsl_set_error_handler_off();
     int gsl_status;
+    // Validate spline data for NaN/inf before initialization (for smoothing path)
+    int has_nan_data = 0;
+    for (i = 0; i < N_NFsamples + N_extrapolated + 1; i++) {
+        if (!isfinite(deltaz[i]) || isnan(deltaz[i]) || !isfinite(NeutralFractions[i]) ||
+            isnan(NeutralFractions[i])) {
+            LOG_ERROR(
+                "determine_deltaz_for_photoncons: Invalid spline data at index %d (after "
+                "smoothing): "
+                "NeutralFractions[%d] = %f, deltaz[%d] = %f",
+                i, i, NeutralFractions[i], i, deltaz[i]);
+            has_nan_data = 1;
+        }
+    }
+    if (has_nan_data) {
+        LOG_ERROR(
+            "determine_deltaz_for_photoncons: Spline data contains NaN/inf values after smoothing. "
+            "Cannot initialize spline.");
+        // Log boundary values specifically
+        int N_total = N_NFsamples + N_extrapolated + 1;
+        LOG_ERROR("Boundary values: NeutralFractions[0] = %f, deltaz[0] = %f", NeutralFractions[0],
+                  deltaz[0]);
+        LOG_ERROR("Boundary values: NeutralFractions[%d] = %f, deltaz[%d] = %f", N_total - 1,
+                  NeutralFractions[N_total - 1], N_total - 1, deltaz[N_total - 1]);
+        Throw(PhotonConsError);
+    }
+
     gsl_status = gsl_spline_init(deltaz_spline_for_photoncons, NeutralFractions, deltaz,
                                  N_NFsamples + N_extrapolated + 1);
     CATCH_GSL_ERROR(gsl_status);
@@ -1072,11 +1145,31 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 eval_NF = spline_xmax;
             }
 
-            // Check the double result BEFORE storing in float to avoid NaN corruption
-            // Use memcpy to check raw bytes for NaN detection that works regardless of compiler
-            // optimizations
-            double delta_z_double = gsl_spline_eval(deltaz_spline_for_photoncons, eval_NF,
-                                                    deltaz_spline_for_photoncons_acc);
+            // Workaround: If very close to boundary (within 1e-6), use boundary value directly
+            // to avoid NaN from spline interpolation near corrupted boundary data
+            double delta_z_double;
+            const double boundary_tolerance = 1e-6;
+            if (fabs(eval_NF - spline_xmax) < boundary_tolerance) {
+                // Use the value at the maximum boundary directly
+                delta_z_double = gsl_spline_eval(deltaz_spline_for_photoncons, spline_xmax,
+                                                 deltaz_spline_for_photoncons_acc);
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: Using boundary value at xmax = %f (eval_NF = "
+                    "%f, diff = %e)",
+                    spline_xmax, eval_NF, fabs(eval_NF - spline_xmax));
+            } else if (fabs(eval_NF - spline_xmin) < boundary_tolerance) {
+                // Use the value at the minimum boundary directly
+                delta_z_double = gsl_spline_eval(deltaz_spline_for_photoncons, spline_xmin,
+                                                 deltaz_spline_for_photoncons_acc);
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: Using boundary value at xmin = %f (eval_NF = "
+                    "%f, diff = %e)",
+                    spline_xmin, eval_NF, fabs(eval_NF - spline_xmin));
+            } else {
+                // Normal evaluation
+                delta_z_double = gsl_spline_eval(deltaz_spline_for_photoncons, eval_NF,
+                                                 deltaz_spline_for_photoncons_acc);
+            }
 
             // Use multiple NaN detection methods - the value prints as "nan" but checks fail,
             // suggesting a compiler optimization or special NaN representation
@@ -1100,6 +1193,7 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
 
             // Check if value is NaN using ALL methods - if ANY detects NaN, it's invalid
             if (!is_finite_check || is_nan_self_neq || isnan_check || is_nan_bitpattern) {
+                // Diagnose why spline evaluation returned NaN - check nearby spline data points
                 LOG_ERROR(
                     "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
                     "delta_z = %f (double) for required_NF = %f (eval_NF = %f, "
@@ -1107,6 +1201,21 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                     "isfinite=%d, isnan=%d, self_neq=%d, bitpattern=%d, raw_bits=0x%016llx)",
                     delta_z_double, required_NF, eval_NF, spline_xmin, spline_xmax, is_finite_check,
                     isnan_check, is_nan_self_neq, is_nan_bitpattern, *nan_check_ptr);
+
+                // Check spline data near the evaluation point to diagnose the issue
+                LOG_ERROR("Spline data near evaluation point (last 5 points):");
+                for (int diag_i = N_spline - 5; diag_i < N_spline; diag_i++) {
+                    if (diag_i >= 0) {
+                        unsigned long long *nf_bits =
+                            (unsigned long long *)&NeutralFractions[diag_i];
+                        unsigned long long *dz_bits = (unsigned long long *)&deltaz[diag_i];
+                        LOG_ERROR(
+                            "  [%d]: NF = %f (bits=0x%016llx), deltaz = %f (bits=0x%016llx), "
+                            "isfinite(NF)=%d, isfinite(dz)=%d",
+                            diag_i, NeutralFractions[diag_i], *nf_bits, deltaz[diag_i], *dz_bits,
+                            isfinite(NeutralFractions[diag_i]), isfinite(deltaz[diag_i]);
+                    }
+                }
                 Throw(PhotonConsError);
             }
 
