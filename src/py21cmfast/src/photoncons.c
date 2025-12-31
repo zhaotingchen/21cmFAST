@@ -717,7 +717,11 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
     double temp;
     float required_NF, adjusted_redshift, temp_redshift, check_required_NF;
 
-    LOG_DEBUG("Adjusting redshifts for photon cons.");
+    // Initialize adjusted_redshift to a safe default value
+    adjusted_redshift = *redshift;
+    *absolute_delta_z = 0.0;
+
+    LOG_DEBUG("Adjusting redshifts for photon cons. Input redshift = %f", *redshift);
 
     if (*redshift < astro_params_global->PHOTONCONS_CALIBRATION_END) {
         LOG_ERROR(
@@ -982,14 +986,28 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
         }
     }
 
-    // Validate adjusted_redshift before returning
+    // Validate adjusted_redshift and absolute_delta_z before returning
+    if (!isfinite(*absolute_delta_z)) {
+        LOG_ERROR(
+            "adjust_redshifts_for_photoncons: absolute_delta_z is invalid = %f (original redshift "
+            "= "
+            "%f, required_NF = %f)",
+            *absolute_delta_z, *redshift, required_NF);
+        Throw(PhotonConsError);
+    }
+
     if (!isfinite(adjusted_redshift) || adjusted_redshift < 0.0) {
         LOG_ERROR(
             "adjust_redshifts_for_photoncons: Final adjusted_redshift is invalid = %f (original = "
-            "%f, delta_z = %f)",
-            adjusted_redshift, *stored_redshift, *absolute_delta_z);
+            "%f, delta_z = %f, required_NF = %f)",
+            adjusted_redshift, *redshift, *absolute_delta_z, required_NF);
         Throw(PhotonConsError);
     }
+
+    LOG_DEBUG(
+        "adjust_redshifts_for_photoncons: Successfully adjusted redshift from %f to %f (delta_z = "
+        "%f)",
+        *redshift, adjusted_redshift, *absolute_delta_z);
 
     // keep the original sampled redshift
     *stored_redshift = *redshift;
