@@ -163,12 +163,18 @@ double T_RECFAST(float z, int flag) {
         return 0;
     }
 
-    // Safety check: ensure spline is initialized before use
-    if (!trecfast_initialized || spline == NULL || acc == NULL) {
-        LOG_ERROR("T_RECFAST: Spline not initialized. Call with flag=1 first.");
-        Throw(ValueError);
+    // Ensure initialization is complete before using spline
+    // Enter critical section to ensure memory visibility and wait for initialization if in progress
+#pragma omp critical(trecfast_init)
+    {
+        // This ensures we see the initialized state after another thread completes initialization
+        if (!trecfast_initialized || spline == NULL || acc == NULL) {
+            LOG_ERROR("T_RECFAST: Spline not initialized. Call with flag=1 first.");
+            Throw(ValueError);
+        }
     }
 
+    // Now safe to use spline (initialization is complete)
     if (z > zt[RECFAST_NPTS - 1]) {  // Called at z>500! Bail out
         LOG_ERROR("Called T_RECFAST with z=%f.", z);
         Throw 1;
@@ -252,12 +258,18 @@ double xion_RECFAST(float z, int flag) {
         return 0;
     }
 
-    // Safety check: ensure spline is initialized before use
-    if (!xionrecfast_initialized || spline == NULL || acc == NULL) {
-        LOG_ERROR("xion_RECFAST: Spline not initialized. Call with flag=1 first.");
-        Throw(ValueError);
+    // Ensure initialization is complete before using spline
+    // Enter critical section to ensure memory visibility and wait for initialization if in progress
+#pragma omp critical(xionrecfast_init)
+    {
+        // This ensures we see the initialized state after another thread completes initialization
+        if (!xionrecfast_initialized || spline == NULL || acc == NULL) {
+            LOG_ERROR("xion_RECFAST: Spline not initialized. Call with flag=1 first.");
+            Throw(ValueError);
+        }
     }
 
+    // Now safe to use spline (initialization is complete)
     if (z > zt[RECFAST_NPTS - 1]) {  // Called at z>500! Bail out
         LOG_ERROR("Called xion_RECFAST with z=%f", z);
         Throw ValueError;
@@ -359,11 +371,17 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
 
     switch (flag) {
         case 2:
-            // Safety check: ensure arrays are initialized before use
+            // Ensure initialization is complete before using arrays
+            // Enter critical section to ensure memory visibility and wait for initialization if in
+            // progress
+#pragma omp critical(spectral_emissivity_init)
+        {
             if (!spectral_emissivity_initialized) {
                 LOG_ERROR("spectral_emissivity: Arrays not initialized. Call with flag=1 first.");
                 Throw(ValueError);
             }
+        }
+            // Now safe to use arrays (initialization is complete)
             // For LW calculateion. New in v1.5, see...
             for (i = 1; i < (NSPEC_MAX - 1); i++) {
                 if ((nu_norm >= nu_n[i]) && (nu_norm < nu_n[i + 1])) {
@@ -429,11 +447,17 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
             return 0.0;
 
         default:
-            // Safety check: ensure arrays are initialized before use
+            // Ensure initialization is complete before using arrays
+            // Enter critical section to ensure memory visibility and wait for initialization if in
+            // progress
+#pragma omp critical(spectral_emissivity_init)
+        {
             if (!spectral_emissivity_initialized) {
                 LOG_ERROR("spectral_emissivity: Arrays not initialized. Call with flag=1 first.");
                 Throw(ValueError);
             }
+        }
+            // Now safe to use arrays (initialization is complete)
             for (i = 1; i < (NSPEC_MAX - 1); i++) {
                 //    printf("checking between %e and %e\n", nu_n[i], nu_n[i+1]);
                 if ((nu_norm >= nu_n[i]) && (nu_norm < nu_n[i + 1])) {
@@ -1462,18 +1486,30 @@ double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
     }
 
     if (flag == 2) {
-        // Safety check: ensure arrays are initialized before use
-        if (!lya_heating_initialized) {
-            LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
-            Throw(ValueError);
+        // Ensure initialization is complete before using arrays
+        // Enter critical section to ensure memory visibility and wait for initialization if in
+        // progress
+#pragma omp critical(lya_heating_init)
+        {
+            if (!lya_heating_initialized) {
+                LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
+                Throw(ValueError);
+            }
         }
+        // Now safe to use arrays (initialization is complete)
         ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, dEC);  // For Continuum Flux
     } else if (flag == 3) {
-        // Safety check: ensure arrays are initialized before use
-        if (!lya_heating_initialized) {
-            LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
-            Throw(ValueError);
+        // Ensure initialization is complete before using arrays
+        // Enter critical section to ensure memory visibility and wait for initialization if in
+        // progress
+#pragma omp critical(lya_heating_init)
+        {
+            if (!lya_heating_initialized) {
+                LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
+                Throw(ValueError);
+            }
         }
+        // Now safe to use arrays (initialization is complete)
         ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, dEI);  // For Injected Flux
     } else {
         LOG_ERROR("invalid flag passed to Energy_Lya_heating");
