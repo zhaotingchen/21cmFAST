@@ -56,6 +56,13 @@ static double BinWidth_pH, inv_BinWidth_pH, BinWidth_elec, inv_BinWidth_elec, Bi
     inv_BinWidth_10, PS_ION_EFF;
 
 int init_heat() {
+    // Guard against multiple initializations - this prevents race conditions
+    // when init_heat() is called from multiple code paths
+    static int heat_initialized = 0;
+    if (heat_initialized) {
+        return 0;
+    }
+
     kappa_10(1.0, 1);
     kappa_10_elec(1.0, 1);
     kappa_10_pH(1.0, 1);
@@ -76,6 +83,7 @@ int init_heat() {
     initialize_interp_arrays();
 
     LOG_SUPER_DEBUG("Done initializing heat.");
+    heat_initialized = 1;
     return 0;
 }
 
@@ -94,6 +102,7 @@ double T_RECFAST(float z, int flag) {
     static double zt[RECFAST_NPTS], TK[RECFAST_NPTS];
     static gsl_interp_accel *acc;
     static gsl_spline *spline;
+    static int trecfast_initialized = 0;  // Guard against re-initialization
     float currz, currTK, trash;
     int i;
     FILE *F;
@@ -101,6 +110,11 @@ double T_RECFAST(float z, int flag) {
     char filename[500];
 
     if (flag == 1) {
+        // Only initialize once - subsequent calls are no-ops
+        if (trecfast_initialized) {
+            return 0;
+        }
+
         // Read in the recfast data
         sprintf(filename, "%s/%s", config_settings.external_table_path, RECFAST_FILENAME);
         if (!(F = fopen(filename, "r"))) {
@@ -120,18 +134,30 @@ double T_RECFAST(float z, int flag) {
         spline = gsl_spline_alloc(gsl_interp_cspline, RECFAST_NPTS);
         gsl_spline_init(spline, zt, TK, RECFAST_NPTS);
 
+        trecfast_initialized = 1;
         return 0;
     }
 
     if (flag == 2) {
         // Free memory
-        gsl_spline_free(spline);
-        gsl_interp_accel_free(acc);
+        if (trecfast_initialized) {
+            gsl_spline_free(spline);
+            gsl_interp_accel_free(acc);
+            spline = NULL;
+            acc = NULL;
+            trecfast_initialized = 0;
+        }
         return 0;
     }
 
+    // Check initialization before use
+    if (!trecfast_initialized || spline == NULL) {
+        LOG_ERROR("T_RECFAST: Spline not initialized. Call with flag=1 first.");
+        Throw(ValueError);
+    }
+
     if (z > zt[RECFAST_NPTS - 1]) {  // Called at z>500! Bail out
-        LOG_ERROR("Called xion_RECFAST with z=%f.", z);
+        LOG_ERROR("Called T_RECFAST with z=%f.", z);
         Throw 1;
     } else {  // Do spline
         ans = gsl_spline_eval(spline, z, acc);
@@ -144,6 +170,7 @@ double xion_RECFAST(float z, int flag) {
     static double zt[RECFAST_NPTS], xion[RECFAST_NPTS];
     static gsl_interp_accel *acc;
     static gsl_spline *spline;
+    static int xionrecfast_initialized = 0;  // Guard against re-initialization
     float trash, currz, currxion;
     double ans;
     int i;
@@ -152,6 +179,11 @@ double xion_RECFAST(float z, int flag) {
     char filename[500];
 
     if (flag == 1) {
+        // Only initialize once - subsequent calls are no-ops
+        if (xionrecfast_initialized) {
+            return 0;
+        }
+
         // Initialize vectors
         sprintf(filename, "%s/%s", config_settings.external_table_path, RECFAST_FILENAME);
         if (!(F = fopen(filename, "r"))) {
@@ -171,13 +203,25 @@ double xion_RECFAST(float z, int flag) {
         spline = gsl_spline_alloc(gsl_interp_cspline, RECFAST_NPTS);
         gsl_spline_init(spline, zt, xion, RECFAST_NPTS);
 
+        xionrecfast_initialized = 1;
         return 0;
     }
 
     if (flag == 2) {
-        gsl_spline_free(spline);
-        gsl_interp_accel_free(acc);
+        if (xionrecfast_initialized) {
+            gsl_spline_free(spline);
+            gsl_interp_accel_free(acc);
+            spline = NULL;
+            acc = NULL;
+            xionrecfast_initialized = 0;
+        }
         return 0;
+    }
+
+    // Check initialization before use
+    if (!xionrecfast_initialized || spline == NULL) {
+        LOG_ERROR("xion_RECFAST: Spline not initialized. Call with flag=1 first.");
+        Throw(ValueError);
     }
 
     if (z > zt[RECFAST_NPTS - 1]) {  // Called at z>500! Bail out
@@ -270,6 +314,7 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
     static int n[NSPEC_MAX];
     static float nu_n[NSPEC_MAX], alpha_S_2[NSPEC_MAX];
     static float alpha_S_3[NSPEC_MAX], N0_2[NSPEC_MAX], N0_3[NSPEC_MAX];
+    static int spectral_emissivity_initialized = 0;  // Guard against re-initialization
     double n0_fac;
     //  double ans, tot, lya;
     double result;
@@ -281,6 +326,11 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
     switch (flag) {
         case 2:
             // For LW calculateion. New in v1.5, see...
+            // Check initialization before use
+            if (!spectral_emissivity_initialized) {
+                LOG_ERROR("spectral_emissivity: Arrays not initialized. Call with flag=1 first.");
+                Throw(ValueError);
+            }
             for (i = 1; i < (NSPEC_MAX - 1); i++) {
                 if ((nu_norm >= nu_n[i]) && (nu_norm < nu_n[i + 1])) {
                     // We are in the correct spectral region
@@ -298,8 +348,15 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
                     }
                 }
             }
+            // Fall through if no spectral region matched - should not happen normally
+            return 1e-40;
 
         case 1:
+            // Only initialize once - subsequent calls are no-ops
+            if (spectral_emissivity_initialized) {
+                return 0.0;
+            }
+
             // * Read in the data * //
             sprintf(filename, "%s/%s", config_settings.external_table_path,
                     STELLAR_SPECTRA_FILENAME);
@@ -328,9 +385,15 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
                 N0_3[i] *= (alpha_S_3[i] + 1) / n0_fac * astro_params_global->POP3_ION;
             }
 
+            spectral_emissivity_initialized = 1;
             return 0.0;
 
         default:
+            // Check initialization before use
+            if (!spectral_emissivity_initialized) {
+                LOG_ERROR("spectral_emissivity: Arrays not initialized. Call with flag=1 first.");
+                Throw(ValueError);
+            }
             for (i = 1; i < (NSPEC_MAX - 1); i++) {
                 //    printf("checking between %e and %e\n", nu_n[i], nu_n[i+1]);
                 if ((nu_norm >= nu_n[i]) && (nu_norm < nu_n[i + 1])) {
@@ -1315,12 +1378,19 @@ double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
     double ans;
     static double dEC[nT * nT * ngp];
     static double dEI[nT * nT * ngp];
+    static int lya_heating_initialized = 0;  // Guard against re-initialization
     int ii, jj, kk, index;
     FILE *F;
 
     char filename[500];
 
     if (flag == 1) {
+        // Only initialize once - subsequent calls are no-ops
+        // This prevents race conditions when init_heat() is called multiple times
+        if (lya_heating_initialized) {
+            return 0;
+        }
+
         // Read in the Lya heating table
         sprintf(filename, "%s/%s", config_settings.external_table_path, LYA_HEATING_FILENAME);
 
@@ -1339,7 +1409,14 @@ double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
         }
 
         fclose(F);
+        lya_heating_initialized = 1;
         return 0;
+    }
+
+    // Check that arrays have been initialized before use
+    if (!lya_heating_initialized) {
+        LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
+        Throw(ValueError);
     }
 
     if (flag == 2) {

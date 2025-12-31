@@ -34,6 +34,7 @@
 #include "logger.h"
 
 bool photon_cons_allocated = false;
+static bool nf_history_spline_allocated = false;  // Track NFHistory spline initialization
 // These globals hold values relevant for the photon conservation (z-shift) model
 static float calibrated_NF_min;
 static double *deltaz, *deltaz_smoothed, *NeutralFractions, *z_Q, *Q_value, *nf_vals, *z_vals;
@@ -362,6 +363,17 @@ void determine_deltaz_for_photoncons() {
     float bin_width, delta_NF, val1, val2, extrapolated_value;
 
     LOG_DEBUG("Determining deltaz for photon cons.");
+
+    // Check that NFHistory spline is initialized before proceeding
+    if (!nf_history_spline_allocated || NFHistory_spline == NULL) {
+        LOG_ERROR(
+            "determine_deltaz_for_photoncons: NFHistory spline not initialized. "
+            "PhotonCons_Calibration must be called first with valid neutral fraction data. "
+            "This can happen if the calibration data doesn't meet the required conditions "
+            "(e.g., xH_estimate values must be > 0 and start <= %.3f).",
+            PhotonConsStart);
+        Throw(PhotonConsError);
+    }
 
     // Number of points for determine the delta z correction of the photon non-conservation
     N_NFsamples = 100;
@@ -851,6 +863,10 @@ void Q_at_z(double z, double *splined_value) {
     } else if (z <= Zmin) {
         *splined_value = 1.;
     } else {
+        if (Q_at_z_spline == NULL || Q_at_z_spline_acc == NULL) {
+            LOG_ERROR("Q_at_z: Spline not initialized. InitialisePhotonCons must be called first.");
+            Throw(PhotonConsError);
+        }
         returned_value = gsl_spline_eval(Q_at_z_spline, z, Q_at_z_spline_acc);
         *splined_value = returned_value;
     }
@@ -872,6 +888,10 @@ void z_at_Q(double Q, double *splined_value) {
         //        Throw(ParameterError);
         Throw(PhotonConsError);
     } else {
+        if (z_at_Q_spline == NULL || z_at_Q_spline_acc == NULL) {
+            LOG_ERROR("z_at_Q: Spline not initialized. InitialisePhotonCons must be called first.");
+            Throw(PhotonConsError);
+        }
         returned_value = gsl_spline_eval(z_at_Q_spline, Q, z_at_Q_spline_acc);
         *splined_value = returned_value;
     }
@@ -950,10 +970,19 @@ void initialise_NFHistory_spline(double *redshifts, double *NF_estimate, int NSp
 
     gsl_status = gsl_spline_init(z_NFHistory_spline, z_vals, nf_vals, (counter + 1));
     CATCH_GSL_ERROR(gsl_status);
+
+    nf_history_spline_allocated = true;
 }
 
 void z_at_NFHist(double xHI_Hist, double *splined_value) {
     float returned_value;
+
+    if (NFHistory_spline == NULL || NFHistory_spline_acc == NULL) {
+        LOG_ERROR(
+            "z_at_NFHist: NFHistory_spline not initialized. "
+            "PhotonCons_Calibration must be called first with valid data.");
+        Throw(PhotonConsError);
+    }
 
     returned_value = gsl_spline_eval(NFHistory_spline, xHI_Hist, NFHistory_spline_acc);
     *splined_value = returned_value;
@@ -962,7 +991,14 @@ void z_at_NFHist(double xHI_Hist, double *splined_value) {
 void NFHist_at_z(double z, double *splined_value) {
     float returned_value;
 
-    returned_value = gsl_spline_eval(z_NFHistory_spline, z, NFHistory_spline_acc);
+    if (z_NFHistory_spline == NULL || z_NFHistory_spline_acc == NULL) {
+        LOG_ERROR(
+            "NFHist_at_z: z_NFHistory_spline not initialized. "
+            "PhotonCons_Calibration must be called first with valid data.");
+        Throw(PhotonConsError);
+    }
+
+    returned_value = gsl_spline_eval(z_NFHistory_spline, z, z_NFHistory_spline_acc);
     *splined_value = returned_value;
 }
 
@@ -1006,12 +1042,25 @@ void FreePhotonConsMemory() {
 
     free_Q_value();
 
-    gsl_spline_free(NFHistory_spline);
-    gsl_interp_accel_free(NFHistory_spline_acc);
-    gsl_spline_free(z_NFHistory_spline);
-    gsl_interp_accel_free(z_NFHistory_spline_acc);
-    gsl_spline_free(deltaz_spline_for_photoncons);
-    gsl_interp_accel_free(deltaz_spline_for_photoncons_acc);
+    // Only free NFHistory splines if they were allocated
+    if (nf_history_spline_allocated) {
+        gsl_spline_free(NFHistory_spline);
+        gsl_interp_accel_free(NFHistory_spline_acc);
+        gsl_spline_free(z_NFHistory_spline);
+        gsl_interp_accel_free(z_NFHistory_spline_acc);
+        NFHistory_spline = NULL;
+        NFHistory_spline_acc = NULL;
+        z_NFHistory_spline = NULL;
+        z_NFHistory_spline_acc = NULL;
+        nf_history_spline_allocated = false;
+    }
+
+    if (photon_cons_allocated) {
+        gsl_spline_free(deltaz_spline_for_photoncons);
+        gsl_interp_accel_free(deltaz_spline_for_photoncons_acc);
+        deltaz_spline_for_photoncons = NULL;
+        deltaz_spline_for_photoncons_acc = NULL;
+    }
     LOG_DEBUG("Done Freeing photon cons memory.");
 
     photon_cons_allocated = false;
