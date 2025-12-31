@@ -729,6 +729,13 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
         if (FirstNF_Estimate <= 0. && required_NF <= 0.0) {
             // Reionisation has already happened well before the calibration
             adjusted_redshift = *redshift;
+        } else if (!NFHistory_spline_initialized) {
+            // NFHistory spline was not initialized (PhotonCons_Calibration conditions not met)
+            // Cannot apply photon conservation correction, keep redshift unchanged
+            LOG_WARNING(
+                "NFHistory spline not initialized. Skipping photon conservation correction.");
+            adjusted_redshift = *redshift;
+            *absolute_delta_z = 0.;
         } else {
 // Initialise the photon non-conservation correction curve
 // It is possible that for certain parameter choices that we can get here without
@@ -785,6 +792,12 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 adjusted_redshift = (*redshift) - (*absolute_delta_z);
             }
         }
+    } else if (!NFHistory_spline_initialized) {
+        // NFHistory spline was not initialized (PhotonCons_Calibration conditions not met)
+        // Cannot apply photon conservation correction, keep redshift unchanged
+        LOG_WARNING("NFHistory spline not initialized. Skipping photon conservation correction.");
+        adjusted_redshift = *redshift;
+        *absolute_delta_z = 0.;
     } else {
 // Initialise the photon non-conservation correction curve
 #pragma omp critical(photon_cons_init)
