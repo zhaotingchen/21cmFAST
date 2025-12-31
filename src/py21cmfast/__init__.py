@@ -54,6 +54,8 @@ __all__ = [
     "generate_lightcone",
     "get_all_fieldnames",
     "get_logspaced_redshifts",
+    "get_photoncons_calibration_data",
+    "init_photoncons_from_calibration_data",
     "lightconers",
     "list_templates",
     "perturb_field",
@@ -117,6 +119,10 @@ from .wrapper.outputs import (
     TsBox,
     XraySourceBox,
 )
-from .wrapper.photoncons import setup_photon_cons
+from .wrapper.photoncons import (
+    get_photoncons_calibration_data,
+    init_photoncons_from_calibration_data,
+    setup_photon_cons,
+)
 
 configure_logging()
