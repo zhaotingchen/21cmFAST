@@ -363,6 +363,23 @@ void determine_deltaz_for_photoncons() {
 
     LOG_DEBUG("Determining deltaz for photon cons.");
 
+    // Check if NFHistory spline is initialized
+    if (NFHistory_spline == NULL || NFHistory_spline_acc == NULL) {
+        LOG_ERROR(
+            "determine_deltaz_for_photoncons: NFHistory_spline not initialized. Call "
+            "PhotonCons_Calibration first.");
+        Throw(PhotonConsError);
+    }
+
+    // Check if calibrated_NF_min is initialized (should be < 1.0 if initialized)
+    if (calibrated_NF_min >= 1.0) {
+        LOG_ERROR(
+            "determine_deltaz_for_photoncons: calibrated_NF_min not initialized (value = %f). Call "
+            "PhotonCons_Calibration first.",
+            calibrated_NF_min);
+        Throw(PhotonConsError);
+    }
+
     // Number of points for determine the delta z correction of the photon non-conservation
     N_NFsamples = 100;
     // Determine the change in neutral fraction to calculate the gradient for the linear
@@ -955,12 +972,26 @@ void initialise_NFHistory_spline(double *redshifts, double *NF_estimate, int NSp
 void z_at_NFHist(double xHI_Hist, double *splined_value) {
     float returned_value;
 
+    if (NFHistory_spline == NULL || NFHistory_spline_acc == NULL) {
+        LOG_ERROR(
+            "z_at_NFHist: NFHistory_spline not initialized. Call initialise_NFHistory_spline "
+            "first.");
+        Throw(PhotonConsError);
+    }
+
     returned_value = gsl_spline_eval(NFHistory_spline, xHI_Hist, NFHistory_spline_acc);
     *splined_value = returned_value;
 }
 
 void NFHist_at_z(double z, double *splined_value) {
     float returned_value;
+
+    if (z_NFHistory_spline == NULL || NFHistory_spline_acc == NULL) {
+        LOG_ERROR(
+            "NFHist_at_z: z_NFHistory_spline not initialized. Call initialise_NFHistory_spline "
+            "first.");
+        Throw(PhotonConsError);
+    }
 
     returned_value = gsl_spline_eval(z_NFHistory_spline, z, NFHistory_spline_acc);
     *splined_value = returned_value;
