@@ -55,10 +55,11 @@
 static double BinWidth_pH, inv_BinWidth_pH, BinWidth_elec, inv_BinWidth_elec, BinWidth_10,
     inv_BinWidth_10, PS_ION_EFF;
 
+// File-scope flag to track if init_heat() has been called
+// This prevents race conditions when init_heat() is called from multiple code paths
+static int heat_initialized = 0;
+
 int init_heat() {
-    // Guard against multiple initializations - this prevents race conditions
-    // when init_heat() is called from multiple code paths
-    static int heat_initialized = 0;
     if (heat_initialized) {
         return 0;
     }
@@ -90,6 +91,8 @@ int init_heat() {
 void destruct_heat() {
     T_RECFAST(100.0, 2);
     xion_RECFAST(100.0, 2);
+    // Reset the initialization flag so init_heat() can be called again
+    heat_initialized = 0;
 }
 
 // ******************************************************************** //
