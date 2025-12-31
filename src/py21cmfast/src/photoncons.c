@@ -20,6 +20,7 @@
 #include <gsl/gsl_interp.h>
 #include <gsl/gsl_spline.h>
 #include <math.h>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -55,6 +56,7 @@ static gsl_interp_accel *NFHistory_spline_acc;
 static gsl_spline *NFHistory_spline;
 static gsl_interp_accel *z_NFHistory_spline_acc;
 static gsl_spline *z_NFHistory_spline;
+static int NFHistory_spline_initialized = 0;
 void initialise_NFHistory_spline(double *redshifts, double *NF_estimate, int NSpline);
 void z_at_NFHist(double xHI_Hist, double *splined_value);
 void NFHist_at_z(double z, double *splined_value);
@@ -728,12 +730,15 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             // Reionisation has already happened well before the calibration
             adjusted_redshift = *redshift;
         } else {
-            // Initialise the photon non-conservation correction curve
-            // It is possible that for certain parameter choices that we can get here without
-            // initialisation happening. Thus check and initialise if not already done so
-            if (!photon_cons_allocated) {
-                determine_deltaz_for_photoncons();
-                photon_cons_allocated = true;
+// Initialise the photon non-conservation correction curve
+// It is possible that for certain parameter choices that we can get here without
+// initialisation happening. Thus check and initialise if not already done so
+#pragma omp critical(photon_cons_init)
+            {
+                if (!photon_cons_allocated) {
+                    determine_deltaz_for_photoncons();
+                    photon_cons_allocated = true;
+                }
             }
 
             // We have crossed the NF threshold for the photon conservation correction so now set to
@@ -781,10 +786,13 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             }
         }
     } else {
-        // Initialise the photon non-conservation correction curve
-        if (!photon_cons_allocated) {
-            determine_deltaz_for_photoncons();
-            photon_cons_allocated = true;
+// Initialise the photon non-conservation correction curve
+#pragma omp critical(photon_cons_init)
+        {
+            if (!photon_cons_allocated) {
+                determine_deltaz_for_photoncons();
+                photon_cons_allocated = true;
+            }
         }
 
         // We have exceeded even the end-point of the extrapolation
@@ -950,10 +958,17 @@ void initialise_NFHistory_spline(double *redshifts, double *NF_estimate, int NSp
 
     gsl_status = gsl_spline_init(z_NFHistory_spline, z_vals, nf_vals, (counter + 1));
     CATCH_GSL_ERROR(gsl_status);
+
+    NFHistory_spline_initialized = 1;
 }
 
 void z_at_NFHist(double xHI_Hist, double *splined_value) {
     float returned_value;
+
+    if (!NFHistory_spline_initialized || NFHistory_spline == NULL) {
+        LOG_ERROR("z_at_NFHist: NFHistory spline not initialized.");
+        Throw(PhotonConsError);
+    }
 
     returned_value = gsl_spline_eval(NFHistory_spline, xHI_Hist, NFHistory_spline_acc);
     *splined_value = returned_value;
@@ -961,6 +976,11 @@ void z_at_NFHist(double xHI_Hist, double *splined_value) {
 
 void NFHist_at_z(double z, double *splined_value) {
     float returned_value;
+
+    if (!NFHistory_spline_initialized || z_NFHistory_spline == NULL) {
+        LOG_ERROR("NFHist_at_z: z_NFHistory spline not initialized.");
+        Throw(PhotonConsError);
+    }
 
     returned_value = gsl_spline_eval(z_NFHistory_spline, z, z_NFHistory_spline_acc);
     *splined_value = returned_value;
@@ -1014,6 +1034,7 @@ void FreePhotonConsMemory() {
     gsl_interp_accel_free(deltaz_spline_for_photoncons_acc);
     LOG_DEBUG("Done Freeing photon cons memory.");
 
+    NFHistory_spline_initialized = 0;
     photon_cons_allocated = false;
 }
 
