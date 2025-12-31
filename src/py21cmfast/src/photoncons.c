@@ -962,7 +962,8 @@ void z_at_NFHist(double xHI_Hist, double *splined_value) {
 void NFHist_at_z(double z, double *splined_value) {
     float returned_value;
 
-    returned_value = gsl_spline_eval(z_NFHistory_spline, z, NFHistory_spline_acc);
+    // Bug fix: was using NFHistory_spline_acc (wrong accelerator for z_NFHistory_spline)
+    returned_value = gsl_spline_eval(z_NFHistory_spline, z, z_NFHistory_spline_acc);
     *splined_value = returned_value;
 }
 
