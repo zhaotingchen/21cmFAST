@@ -89,12 +89,17 @@ double splined_recombination_rate(double z_eff, double gamma12_bg) {
         }
     }
 
-    // Safety check: ensure splines are initialized before use
-    if (!mhr_initialized || RR_spline[z_ct] == NULL || RR_acc[z_ct] == NULL) {
-        LOG_ERROR("splined_recombination_rate: MHR not initialized. Call init_MHR() first.");
-        Throw(ValueError);
+    // Ensure initialization is complete before using splines
+    // Enter critical section to ensure memory visibility and wait for initialization if in progress
+#pragma omp critical(mhr_init)
+    {
+        if (!mhr_initialized || RR_spline[z_ct] == NULL || RR_acc[z_ct] == NULL) {
+            LOG_ERROR("splined_recombination_rate: MHR not initialized. Call init_MHR() first.");
+            Throw(ValueError);
+        }
     }
 
+    // Now safe to use splines (initialization is complete)
     return gsl_spline_eval(RR_spline[z_ct], lnGamma, RR_acc[z_ct]);
 }
 
@@ -380,10 +385,17 @@ void init_A_MHR() {
 }
 
 double splined_A_MHR(double x) {
-    if (A_spline == NULL || A_acc == NULL) {
-        LOG_ERROR("splined_A_MHR: Spline not initialized. Call init_A_MHR() first.");
-        Throw(ValueError);
+    // Ensure initialization is complete before using spline
+    // Enter critical section to ensure memory visibility (init happens in init_MHR which uses
+    // mhr_init)
+#pragma omp critical(mhr_init)
+    {
+        if (A_spline == NULL || A_acc == NULL) {
+            LOG_ERROR("splined_A_MHR: Spline not initialized. Call init_A_MHR() first.");
+            Throw(ValueError);
+        }
     }
+    // Now safe to use spline (initialization is complete)
     return gsl_spline_eval(A_spline, x, A_acc);
 }
 
@@ -451,10 +463,17 @@ void init_C_MHR() {
 }
 
 double splined_C_MHR(double x) {
-    if (C_spline == NULL || C_acc == NULL) {
-        LOG_ERROR("splined_C_MHR: Spline not initialized. Call init_C_MHR() first.");
-        Throw(ValueError);
+    // Ensure initialization is complete before using spline
+    // Enter critical section to ensure memory visibility (init happens in init_MHR which uses
+    // mhr_init)
+#pragma omp critical(mhr_init)
+    {
+        if (C_spline == NULL || C_acc == NULL) {
+            LOG_ERROR("splined_C_MHR: Spline not initialized. Call init_C_MHR() first.");
+            Throw(ValueError);
+        }
     }
+    // Now safe to use spline (initialization is complete)
     return gsl_spline_eval(C_spline, x, C_acc);
 }
 
@@ -515,10 +534,17 @@ void init_beta_MHR() {
 }
 
 double splined_beta_MHR(double x) {
-    if (beta_spline == NULL || beta_acc == NULL) {
-        LOG_ERROR("splined_beta_MHR: Spline not initialized. Call init_beta_MHR() first.");
-        Throw(ValueError);
+    // Ensure initialization is complete before using spline
+    // Enter critical section to ensure memory visibility (init happens in init_MHR which uses
+    // mhr_init)
+#pragma omp critical(mhr_init)
+    {
+        if (beta_spline == NULL || beta_acc == NULL) {
+            LOG_ERROR("splined_beta_MHR: Spline not initialized. Call init_beta_MHR() first.");
+            Throw(ValueError);
+        }
     }
+    // Now safe to use spline (initialization is complete)
     return gsl_spline_eval(beta_spline, x, beta_acc);
 }
 

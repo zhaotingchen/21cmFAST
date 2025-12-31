@@ -764,13 +764,13 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                     determine_deltaz_for_photoncons();
                     photon_cons_allocated = true;
                 }
-            }
-
-            // Safety check: ensure spline is initialized before use
-            if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL ||
-                deltaz_spline_for_photoncons_acc == NULL) {
-                LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
-                Throw(PhotonConsError);
+                // Safety check: ensure spline is initialized before use (inside critical section
+                // for memory visibility)
+                if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL ||
+                    deltaz_spline_for_photoncons_acc == NULL) {
+                    LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
+                    Throw(PhotonConsError);
+                }
             }
 
             // We have crossed the NF threshold for the photon conservation correction so now set to
@@ -826,13 +826,13 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 determine_deltaz_for_photoncons();
                 photon_cons_allocated = true;
             }
-        }
-
-        // Safety check: ensure spline is initialized before use
-        if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL ||
-            deltaz_spline_for_photoncons_acc == NULL) {
-            LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
-            Throw(PhotonConsError);
+            // Safety check: ensure spline is initialized before use (inside critical section for
+            // memory visibility)
+            if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL ||
+                deltaz_spline_for_photoncons_acc == NULL) {
+                LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
+                Throw(PhotonConsError);
+            }
         }
 
         // We have exceeded even the end-point of the extrapolation
@@ -877,12 +877,18 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
         } else {
             // Find the corresponding redshift for the calibration curve given the required neutral
             // fraction (filling factor) from the analytic expression
-            // Additional safety check before using spline
-            if (deltaz_spline_for_photoncons == NULL || deltaz_spline_for_photoncons_acc == NULL) {
-                LOG_ERROR(
-                    "adjust_redshifts_for_photoncons: Spline is NULL when trying to evaluate.");
-                Throw(PhotonConsError);
+            // Additional safety check before using spline (inside critical section for memory
+            // visibility)
+#pragma omp critical(photoncons_init)
+            {
+                if (deltaz_spline_for_photoncons == NULL ||
+                    deltaz_spline_for_photoncons_acc == NULL) {
+                    LOG_ERROR(
+                        "adjust_redshifts_for_photoncons: Spline is NULL when trying to evaluate.");
+                    Throw(PhotonConsError);
+                }
             }
+            // Now safe to use spline (initialization is complete)
             *absolute_delta_z = gsl_spline_eval(deltaz_spline_for_photoncons, (double)required_NF,
                                                 deltaz_spline_for_photoncons_acc);
             adjusted_redshift = (*redshift) - (*absolute_delta_z);
