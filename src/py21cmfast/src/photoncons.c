@@ -763,12 +763,21 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
 
     // Find which redshift we need to sample in order for the calibration reionisation history to
     // match the analytic expression
+    LOG_DEBUG(
+        "adjust_redshifts_for_photoncons: required_NF = %f, PhotonConsStart = %f, PhotonConsEnd = "
+        "%f",
+        required_NF, PhotonConsStart, PhotonConsEnd);
+
     if (required_NF > PhotonConsStart) {
         // We haven't started ionising yet, so keep redshifts the same
         adjusted_redshift = *redshift;
 
         *absolute_delta_z = 0.;
+        LOG_DEBUG(
+            "adjust_redshifts_for_photoncons: Path 1 - required_NF > PhotonConsStart, keeping "
+            "redshift same");
     } else if (required_NF <= PhotonConsEnd) {
+        LOG_DEBUG("adjust_redshifts_for_photoncons: Path 2 - required_NF <= PhotonConsEnd");
         // We have gone beyond the threshold for the end of the photon non-conservation correction
         // Deemed to be roughly where the calibration curve starts to approach the analytic
         // expression
@@ -798,9 +807,17 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             if (required_NF < PhotonConsAsymptoteTo) {
                 // This counts the number of times we have exceeded the extrapolated point and
                 // attempts to modify the delta z to try and make the function a little smoother
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: Evaluating spline at PhotonConsAsymptoteTo = "
+                    "%f",
+                    PhotonConsAsymptoteTo);
                 *absolute_delta_z =
                     gsl_spline_eval(deltaz_spline_for_photoncons, PhotonConsAsymptoteTo,
                                     deltaz_spline_for_photoncons_acc);
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: Spline result at asymptote: delta_z = %f, "
+                    "isfinite = %d",
+                    *absolute_delta_z, isfinite(*absolute_delta_z));
                 if (!isfinite(*absolute_delta_z)) {
                     LOG_ERROR(
                         "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
@@ -849,11 +866,19 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 }
 
                 // Now adjust the final delta_z by some amount to smooth if over successive steps
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: Before smoothing - delta_z = %f, new_counter "
+                    "= %d",
+                    *absolute_delta_z, new_counter);
                 if (deltaz[1] > deltaz[0]) {
                     *absolute_delta_z = pow(0.96, (new_counter - 1) + 1.) * (*absolute_delta_z);
                 } else {
                     *absolute_delta_z = pow(1.04, (new_counter - 1) + 1.) * (*absolute_delta_z);
                 }
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: After smoothing - delta_z = %f, isfinite = "
+                    "%d",
+                    *absolute_delta_z, isfinite(*absolute_delta_z));
 
                 // Validate delta_z after smoothing
                 if (!isfinite(*absolute_delta_z)) {
@@ -867,13 +892,24 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
 
                 // Check if we go into the future (z < 0) and avoid it
                 adjusted_redshift = (*redshift) - (*absolute_delta_z);
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: After subtraction - adjusted_redshift = %f, "
+                    "isfinite = %d",
+                    adjusted_redshift, isfinite(adjusted_redshift));
                 if (adjusted_redshift < 0.0) {
                     adjusted_redshift = 0.0;
                 }
 
             } else {
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: Evaluating spline for required_NF = %f (in "
+                    "else branch)",
+                    required_NF);
                 *absolute_delta_z = gsl_spline_eval(deltaz_spline_for_photoncons, required_NF,
                                                     deltaz_spline_for_photoncons_acc);
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: Spline result: delta_z = %f, isfinite = %d",
+                    *absolute_delta_z, isfinite(*absolute_delta_z));
                 if (!isfinite(*absolute_delta_z)) {
                     LOG_ERROR(
                         "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
@@ -882,9 +918,16 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                     Throw(PhotonConsError);
                 }
                 adjusted_redshift = (*redshift) - (*absolute_delta_z);
+                LOG_DEBUG(
+                    "adjust_redshifts_for_photoncons: After subtraction in else: adjusted_redshift "
+                    "= %f",
+                    adjusted_redshift);
             }
         }
     } else {
+        LOG_DEBUG(
+            "adjust_redshifts_for_photoncons: Path 3 - required_NF > PhotonConsEnd (extrapolation "
+            "path)");
         // Initialise the photon non-conservation correction curve
         if (!photon_cons_allocated) {
             // Check if calibration was successful before trying to determine deltaz
@@ -950,11 +993,19 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             }
 
             // Now adjust the final delta_z by some amount to smooth if over successive steps
+            LOG_DEBUG(
+                "adjust_redshifts_for_photoncons: Before smoothing (second path) - delta_z = %f, "
+                "new_counter = %d",
+                *absolute_delta_z, new_counter);
             if (deltaz[1] > deltaz[0]) {
                 *absolute_delta_z = pow(0.998, (new_counter - 1) + 1.) * (*absolute_delta_z);
             } else {
                 *absolute_delta_z = pow(1.002, (new_counter - 1) + 1.) * (*absolute_delta_z);
             }
+            LOG_DEBUG(
+                "adjust_redshifts_for_photoncons: After smoothing (second path) - delta_z = %f, "
+                "isfinite = %d",
+                *absolute_delta_z, isfinite(*absolute_delta_z));
 
             // Validate delta_z after smoothing
             if (!isfinite(*absolute_delta_z)) {
@@ -967,14 +1018,26 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
 
             // Check if we go into the future (z < 0) and avoid it
             adjusted_redshift = (*redshift) - (*absolute_delta_z);
+            LOG_DEBUG(
+                "adjust_redshifts_for_photoncons: After subtraction (second path) - "
+                "adjusted_redshift = %f, isfinite = %d",
+                adjusted_redshift, isfinite(adjusted_redshift));
             if (adjusted_redshift < 0.0) {
                 adjusted_redshift = 0.0;
             }
         } else {
             // Find the corresponding redshift for the calibration curve given the required neutral
             // fraction (filling factor) from the analytic expression
+            LOG_DEBUG(
+                "adjust_redshifts_for_photoncons: Evaluating spline for required_NF = %f "
+                "(NeutralFractions[0] = %f)",
+                required_NF, NeutralFractions[0]);
             *absolute_delta_z = gsl_spline_eval(deltaz_spline_for_photoncons, (double)required_NF,
                                                 deltaz_spline_for_photoncons_acc);
+            LOG_DEBUG(
+                "adjust_redshifts_for_photoncons: Spline evaluation result: delta_z = %f, isfinite "
+                "= %d",
+                *absolute_delta_z, isfinite(*absolute_delta_z));
             if (!isfinite(*absolute_delta_z)) {
                 LOG_ERROR(
                     "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
@@ -983,10 +1046,21 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 Throw(PhotonConsError);
             }
             adjusted_redshift = (*redshift) - (*absolute_delta_z);
+            LOG_DEBUG(
+                "adjust_redshifts_for_photoncons: After subtraction: adjusted_redshift = %f "
+                "(redshift = %f, delta_z = %f)",
+                adjusted_redshift, *redshift, *absolute_delta_z);
         }
     }
 
     // Validate adjusted_redshift and absolute_delta_z before returning
+    // Add debug logging to trace the values before validation
+    LOG_DEBUG(
+        "adjust_redshifts_for_photoncons: Before validation - adjusted_redshift = %f, "
+        "absolute_delta_z = %f, isfinite(delta_z) = %d, isfinite(adj_z) = %d",
+        adjusted_redshift, *absolute_delta_z, isfinite(*absolute_delta_z),
+        isfinite(adjusted_redshift));
+
     if (!isfinite(*absolute_delta_z)) {
         LOG_ERROR(
             "adjust_redshifts_for_photoncons: absolute_delta_z is invalid = %f (original redshift "
