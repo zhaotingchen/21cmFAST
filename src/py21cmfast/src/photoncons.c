@@ -323,6 +323,13 @@ int PhotonCons_Calibration(double *z_estimate, double *xH_estimate, int NSpline)
         if (xH_estimate[NSpline - 1] > 0.0 && xH_estimate[NSpline - 2] > 0.0 &&
             xH_estimate[NSpline - 3] > 0.0 && xH_estimate[0] <= PhotonConsStart) {
             initialise_NFHistory_spline(z_estimate, xH_estimate, NSpline);
+        } else {
+            LOG_WARNING(
+                "PhotonCons_Calibration: Conditions not met for spline initialization. "
+                "xH[%d]=%e, xH[%d]=%e, xH[%d]=%e, xH[0]=%e, PhotonConsStart=%e. "
+                "Spline will not be initialized.",
+                NSpline - 1, xH_estimate[NSpline - 1], NSpline - 2, xH_estimate[NSpline - 2],
+                NSpline - 3, xH_estimate[NSpline - 3], xH_estimate[0], PhotonConsStart);
         }
     }
     Catch(status) { return status; }
@@ -749,6 +756,14 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             // It is possible that for certain parameter choices that we can get here without
             // initialisation happening. Thus check and initialise if not already done so
             if (!photon_cons_allocated) {
+                // Check if calibration was successful before trying to determine deltaz
+                if (NFHistory_spline == NULL || NFHistory_spline_acc == NULL) {
+                    LOG_ERROR(
+                        "adjust_redshifts_for_photoncons: Cannot determine deltaz - "
+                        "PhotonCons_Calibration did not initialize NFHistory_spline. "
+                        "This may occur if calibration conditions were not met.");
+                    Throw(PhotonConsError);
+                }
                 determine_deltaz_for_photoncons();
                 photon_cons_allocated = true;
             }
@@ -800,6 +815,14 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
     } else {
         // Initialise the photon non-conservation correction curve
         if (!photon_cons_allocated) {
+            // Check if calibration was successful before trying to determine deltaz
+            if (NFHistory_spline == NULL || NFHistory_spline_acc == NULL) {
+                LOG_ERROR(
+                    "adjust_redshifts_for_photoncons: Cannot determine deltaz - "
+                    "PhotonCons_Calibration did not initialize NFHistory_spline. "
+                    "This may occur if calibration conditions were not met.");
+                Throw(PhotonConsError);
+            }
             determine_deltaz_for_photoncons();
             photon_cons_allocated = true;
         }
