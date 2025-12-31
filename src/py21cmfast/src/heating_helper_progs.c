@@ -1315,12 +1315,19 @@ double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
     double ans;
     static double dEC[nT * nT * ngp];
     static double dEI[nT * nT * ngp];
+    static int initialized = 0;  // Flag to prevent race condition - only read file once
     int ii, jj, kk, index;
     FILE *F;
 
     char filename[500];
 
     if (flag == 1) {
+        // Only read the file once, even if called multiple times
+        // This prevents race conditions when multiple processes/threads try to read simultaneously
+        if (initialized) {
+            return 0;
+        }
+
         // Read in the Lya heating table
         sprintf(filename, "%s/%s", config_settings.external_table_path, LYA_HEATING_FILENAME);
 
@@ -1333,12 +1340,22 @@ double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
             for (jj = 0; jj < nT; jj++) {
                 for (kk = 0; kk < ngp; kk++) {
                     index = ii * nT * ngp + jj * ngp + kk;
-                    fscanf(F, "%lf %lf", &dEC[index], &dEI[index]);
+                    int items_read = fscanf(F, "%lf %lf", &dEC[index], &dEI[index]);
+                    if (items_read != 2) {
+                        LOG_ERROR(
+                            "Energy_Lya_heating: fscanf failed at index (%d,%d,%d), expected 2 "
+                            "items but read %d. File may be corrupted or accessed by multiple "
+                            "processes.",
+                            ii, jj, kk, items_read);
+                        fclose(F);
+                        Throw(IOError);
+                    }
                 }
             }
         }
 
         fclose(F);
+        initialized = 1;  // Mark as initialized to prevent re-reading
         return 0;
     }
 
