@@ -816,9 +816,10 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                                     deltaz_spline_for_photoncons_acc);
                 LOG_DEBUG(
                     "adjust_redshifts_for_photoncons: Spline result at asymptote: delta_z = %f, "
-                    "isfinite = %d",
-                    *absolute_delta_z, isfinite(*absolute_delta_z));
-                if (!isfinite(*absolute_delta_z)) {
+                    "isfinite = %d, isnan = %d",
+                    *absolute_delta_z, isfinite((double)*absolute_delta_z),
+                    isnan((double)*absolute_delta_z));
+                if (!isfinite((double)*absolute_delta_z) || isnan((double)*absolute_delta_z)) {
                     LOG_ERROR(
                         "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
                         "delta_z = %f for PhotonConsAsymptoteTo = %f",
@@ -877,11 +878,12 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 }
                 LOG_DEBUG(
                     "adjust_redshifts_for_photoncons: After smoothing - delta_z = %f, isfinite = "
-                    "%d",
-                    *absolute_delta_z, isfinite(*absolute_delta_z));
+                    "%d, isnan = %d",
+                    *absolute_delta_z, isfinite((double)*absolute_delta_z),
+                    isnan((double)*absolute_delta_z));
 
                 // Validate delta_z after smoothing
-                if (!isfinite(*absolute_delta_z)) {
+                if (!isfinite((double)*absolute_delta_z) || isnan((double)*absolute_delta_z)) {
                     LOG_ERROR(
                         "adjust_redshifts_for_photoncons: delta_z became non-finite after "
                         "smoothing "
@@ -894,8 +896,9 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 adjusted_redshift = (*redshift) - (*absolute_delta_z);
                 LOG_DEBUG(
                     "adjust_redshifts_for_photoncons: After subtraction - adjusted_redshift = %f, "
-                    "isfinite = %d",
-                    adjusted_redshift, isfinite(adjusted_redshift));
+                    "isfinite = %d, isnan = %d",
+                    adjusted_redshift, isfinite((double)adjusted_redshift),
+                    isnan((double)adjusted_redshift));
                 if (adjusted_redshift < 0.0) {
                     adjusted_redshift = 0.0;
                 }
@@ -908,9 +911,11 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 *absolute_delta_z = gsl_spline_eval(deltaz_spline_for_photoncons, required_NF,
                                                     deltaz_spline_for_photoncons_acc);
                 LOG_DEBUG(
-                    "adjust_redshifts_for_photoncons: Spline result: delta_z = %f, isfinite = %d",
-                    *absolute_delta_z, isfinite(*absolute_delta_z));
-                if (!isfinite(*absolute_delta_z)) {
+                    "adjust_redshifts_for_photoncons: Spline result: delta_z = %f, isfinite = %d, "
+                    "isnan = %d",
+                    *absolute_delta_z, isfinite((double)*absolute_delta_z),
+                    isnan((double)*absolute_delta_z));
+                if (!isfinite((double)*absolute_delta_z) || isnan((double)*absolute_delta_z)) {
                     LOG_ERROR(
                         "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
                         "delta_z = %f for required_NF = %f",
@@ -1004,11 +1009,12 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             }
             LOG_DEBUG(
                 "adjust_redshifts_for_photoncons: After smoothing (second path) - delta_z = %f, "
-                "isfinite = %d",
-                *absolute_delta_z, isfinite(*absolute_delta_z));
+                "isfinite = %d, isnan = %d",
+                *absolute_delta_z, isfinite((double)*absolute_delta_z),
+                isnan((double)*absolute_delta_z));
 
             // Validate delta_z after smoothing
-            if (!isfinite(*absolute_delta_z)) {
+            if (!isfinite((double)*absolute_delta_z) || isnan((double)*absolute_delta_z)) {
                 LOG_ERROR(
                     "adjust_redshifts_for_photoncons: delta_z became non-finite after smoothing "
                     "= %f (new_counter = %d)",
@@ -1020,8 +1026,9 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             adjusted_redshift = (*redshift) - (*absolute_delta_z);
             LOG_DEBUG(
                 "adjust_redshifts_for_photoncons: After subtraction (second path) - "
-                "adjusted_redshift = %f, isfinite = %d",
-                adjusted_redshift, isfinite(adjusted_redshift));
+                "adjusted_redshift = %f, isfinite = %d, isnan = %d",
+                adjusted_redshift, isfinite((double)adjusted_redshift),
+                isnan((double)adjusted_redshift));
             if (adjusted_redshift < 0.0) {
                 adjusted_redshift = 0.0;
             }
@@ -1034,15 +1041,20 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 required_NF, NeutralFractions[0]);
             *absolute_delta_z = gsl_spline_eval(deltaz_spline_for_photoncons, (double)required_NF,
                                                 deltaz_spline_for_photoncons_acc);
+            // Check for NaN/inf using explicit comparison since isfinite() may have type issues
+            // with float Use explicit NaN check: NaN != NaN is always true
+            double delta_z_double = (double)*absolute_delta_z;
+            int is_nan = (delta_z_double != delta_z_double);
+            int is_finite = isfinite(delta_z_double);
             LOG_DEBUG(
                 "adjust_redshifts_for_photoncons: Spline evaluation result: delta_z = %f, isfinite "
-                "= %d",
-                *absolute_delta_z, isfinite(*absolute_delta_z));
-            if (!isfinite(*absolute_delta_z)) {
+                "= %d, isnan = %d, (delta_z != delta_z) = %d",
+                *absolute_delta_z, is_finite, isnan(delta_z_double), is_nan);
+            if (!is_finite || is_nan || isnan(delta_z_double)) {
                 LOG_ERROR(
                     "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
-                    "delta_z = %f for required_NF = %f",
-                    *absolute_delta_z, required_NF);
+                    "delta_z = %f for required_NF = %f (isfinite=%d, isnan=%d, self_neq=%d)",
+                    *absolute_delta_z, required_NF, is_finite, isnan(delta_z_double), is_nan);
                 Throw(PhotonConsError);
             }
             adjusted_redshift = (*redshift) - (*absolute_delta_z);
@@ -1055,13 +1067,22 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
 
     // Validate adjusted_redshift and absolute_delta_z before returning
     // Add debug logging to trace the values before validation
+    // Use explicit NaN check: NaN != NaN is always true
+    double delta_z_double = (double)*absolute_delta_z;
+    double adj_z_double = (double)adjusted_redshift;
+    int delta_z_is_nan = (delta_z_double != delta_z_double);
+    int adj_z_is_nan = (adj_z_double != adj_z_double);
+    int delta_z_is_finite = isfinite(delta_z_double);
+    int adj_z_is_finite = isfinite(adj_z_double);
+
     LOG_DEBUG(
         "adjust_redshifts_for_photoncons: Before validation - adjusted_redshift = %f, "
-        "absolute_delta_z = %f, isfinite(delta_z) = %d, isfinite(adj_z) = %d",
-        adjusted_redshift, *absolute_delta_z, isfinite(*absolute_delta_z),
-        isfinite(adjusted_redshift));
+        "absolute_delta_z = %f, isfinite(delta_z) = %d, isnan(delta_z) = %d, self_neq(delta_z) = "
+        "%d, isfinite(adj_z) = %d, isnan(adj_z) = %d, self_neq(adj_z) = %d",
+        adjusted_redshift, *absolute_delta_z, delta_z_is_finite, isnan(delta_z_double),
+        delta_z_is_nan, adj_z_is_finite, isnan(adj_z_double), adj_z_is_nan);
 
-    if (!isfinite(*absolute_delta_z)) {
+    if (!delta_z_is_finite || delta_z_is_nan || isnan(delta_z_double)) {
         LOG_ERROR(
             "adjust_redshifts_for_photoncons: absolute_delta_z is invalid = %f (original redshift "
             "= "
@@ -1070,7 +1091,7 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
         Throw(PhotonConsError);
     }
 
-    if (!isfinite(adjusted_redshift) || adjusted_redshift < 0.0) {
+    if (!adj_z_is_finite || adj_z_is_nan || isnan(adj_z_double) || adjusted_redshift < 0.0) {
         LOG_ERROR(
             "adjust_redshifts_for_photoncons: Final adjusted_redshift is invalid = %f (original = "
             "%f, delta_z = %f, required_NF = %f)",
