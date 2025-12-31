@@ -1181,8 +1181,8 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             int is_nan_bitpattern =
                 (*nan_check_ptr == 0x7ff8000000000000ULL ||  // quiet NaN
                  *nan_check_ptr == 0x7ff0000000000001ULL ||  // signaling NaN (range)
-                 (*nan_check_ptr & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
-                     (*nan_check_ptr & 0x000fffffffffffffULL) != 0);  // any NaN
+                 ((*nan_check_ptr & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                  (*nan_check_ptr & 0x000fffffffffffffULL) != 0));  // any NaN
 
             LOG_DEBUG(
                 "adjust_redshifts_for_photoncons: Spline evaluation result (double): delta_z = %f, "
@@ -1213,7 +1213,7 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                             "  [%d]: NF = %f (bits=0x%016llx), deltaz = %f (bits=0x%016llx), "
                             "isfinite(NF)=%d, isfinite(dz)=%d",
                             diag_i, NeutralFractions[diag_i], *nf_bits, deltaz[diag_i], *dz_bits,
-                            isfinite(NeutralFractions[diag_i]), isfinite(deltaz[diag_i]);
+                            isfinite(NeutralFractions[diag_i]), isfinite(deltaz[diag_i]));
                     }
                 }
                 Throw(PhotonConsError);
