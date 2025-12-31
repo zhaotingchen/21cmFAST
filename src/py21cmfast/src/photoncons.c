@@ -231,8 +231,7 @@ int InitialisePhotonCons() {
                 Q_arr[cnt] = Q1;
 
                 cnt = cnt + 1;
-                // if (Q1 >= 1.0) break; // if fully ionized, stop here. NOTE(jdavies) I turned this
-                // off to find photon ratios, it shouldn't affect much
+                if (Q1 >= 1.0) break;  // if fully ionized, stop here
                 //  As the Q value increases, the bin size decreases gradually because more accurate
                 //  calculation is required.
                 if (da < 7e-5)
@@ -274,6 +273,22 @@ int InitialisePhotonCons() {
         for (i = 0; i < nbin; i++) {
             z_Q[i] = z_arr[cnt - i];
             Q_value[i] = Q_arr[cnt - i];
+
+            // Validate Q values are within [0, 1] range before building spline
+            if (Q_value[i] > 1.0) {
+                LOG_ERROR(
+                    "InitialisePhotonCons: Q_value[%d] = %e > 1.0 at z = %e. "
+                    "Ionized fraction cannot exceed 1.0.",
+                    i, Q_value[i], z_Q[i]);
+                Throw(PhotonConsError);
+            }
+            if (Q_value[i] < 0.0) {
+                LOG_ERROR(
+                    "InitialisePhotonCons: Q_value[%d] = %e < 0.0 at z = %e. "
+                    "Ionized fraction cannot be negative.",
+                    i, Q_value[i], z_Q[i]);
+                Throw(PhotonConsError);
+            }
         }
 
         gsl_set_error_handler_off();
@@ -1453,6 +1468,24 @@ void Q_at_z(double z, double *splined_value) {
                 returned_value, z, Zmin, Zmax);
             *splined_value = NAN;
             return;
+        }
+        // Validate Q is within [0, 1] range (ionized fraction cannot exceed these bounds)
+        if (returned_value > 1.0) {
+            LOG_ERROR(
+                "Q_at_z: gsl_spline_eval returned Q = %e > 1.0 for z = %e (Zmin = %e, Zmax = %e). "
+                "Ionized fraction cannot exceed 1.0. This may indicate spline overshoot or invalid "
+                "data.",
+                returned_value, z, Zmin, Zmax);
+            *splined_value = NAN;
+            Throw(PhotonConsError);
+        }
+        if (returned_value < 0.0) {
+            LOG_ERROR(
+                "Q_at_z: gsl_spline_eval returned Q = %e < 0.0 for z = %e (Zmin = %e, Zmax = %e). "
+                "Ionized fraction cannot be negative.",
+                returned_value, z, Zmin, Zmax);
+            *splined_value = NAN;
+            Throw(PhotonConsError);
         }
         *splined_value = returned_value;
     }
