@@ -487,11 +487,12 @@ void determine_deltaz_for_photoncons() {
         int dz_is_nan = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
                          (*dz_bits & 0x000fffffffffffffULL) != 0);
         if (dz_is_nan) {
-            LOG_ERROR(
+            LOG_WARNING(
                 "determine_deltaz_for_photoncons: deltaz[%d] = %f (bits=0x%016llx) is NaN "
-                "(z_cal = %f, z_analytic = %f, NF_sample = %f)",
+                "(z_cal = %f, z_analytic = %f, NF_sample = %f). Setting to 0.0 as fallback.",
                 i + 1 + N_extrapolated, deltaz[i + 1 + N_extrapolated], *dz_bits, z_cal, z_analytic,
                 NF_sample);
+            deltaz[i + 1 + N_extrapolated] = 0.0;
         }
     }
 
@@ -503,6 +504,18 @@ void determine_deltaz_for_photoncons() {
             deltaz[0] = 0.999 * deltaz[1];
         else
             deltaz[0] = 1.001 * deltaz[1];
+
+        // Quick fix: Check if deltaz[0] is NaN and set to 0
+        unsigned long long *dz0_bits = (unsigned long long *)&deltaz[0];
+        int dz0_is_nan = ((*dz0_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                          (*dz0_bits & 0x000fffffffffffffULL) != 0);
+        if (dz0_is_nan) {
+            LOG_WARNING(
+                "determine_deltaz_for_photoncons: deltaz[0] = %f is NaN after boundary "
+                "computation. Setting to 0.0 as fallback.",
+                deltaz[0]);
+            deltaz[0] = 0.0;
+        }
 
         N_deltaz = N_NFsamples + N_extrapolated + 1;
 
@@ -592,6 +605,18 @@ void determine_deltaz_for_photoncons() {
             // the last point slightly smaller
             deltaz[0] = 0.999 * deltaz[1];
         }
+
+        // Quick fix: Check if deltaz[0] is NaN and set to 0
+        unsigned long long *dz0_bits = (unsigned long long *)&deltaz[0];
+        int dz0_is_nan = ((*dz0_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                          (*dz0_bits & 0x000fffffffffffffULL) != 0);
+        if (dz0_is_nan) {
+            LOG_WARNING(
+                "determine_deltaz_for_photoncons: deltaz[0] = %f is NaN after boundary computation "
+                "(smoothing path). Setting to 0.0 as fallback.",
+                deltaz[0]);
+            deltaz[0] = 0.0;
+        }
     } else {
         // Ok, we are going to be extrapolating the photon non-conservation (delta z) beyond the
         // threshold Construct a linear curve for the analytic function to extrapolate to the new
@@ -628,6 +653,19 @@ void determine_deltaz_for_photoncons() {
         deltaz[0] = fabs(z_cal - z_analytic_at_endpoint);
         NeutralFractions[0] = extrapolated_value;
 
+        // Quick fix: Check if deltaz[0] is NaN and set to 0
+        unsigned long long *dz0_bits = (unsigned long long *)&deltaz[0];
+        int dz0_is_nan = ((*dz0_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                          (*dz0_bits & 0x000fffffffffffffULL) != 0);
+        if (dz0_is_nan) {
+            LOG_WARNING(
+                "determine_deltaz_for_photoncons: deltaz[0] = %f is NaN after extrapolation "
+                "endpoint computation (z_cal = %f, z_analytic_at_endpoint = %f). Setting to 0.0 as "
+                "fallback.",
+                deltaz[0], z_cal, z_analytic_at_endpoint);
+            deltaz[0] = 0.0;
+        }
+
         // If performing extrapolation, add in all the extrapolated points between the end-point and
         // the threshold to end the correction (PhotonConsEnd)
         for (i = 0; i < N_extrapolated; i++) {
@@ -643,6 +681,17 @@ void determine_deltaz_for_photoncons() {
 
             deltaz[i + 1] = deltaz[0] + (deltaz[1 + N_extrapolated] - deltaz[0]) * (float)(i + 1) /
                                             ((float)N_extrapolated + 1.);
+            // Quick fix: Check if deltaz[i+1] is NaN after interpolation
+            unsigned long long *dz_bits = (unsigned long long *)&deltaz[i + 1];
+            int dz_is_nan = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                             (*dz_bits & 0x000fffffffffffffULL) != 0);
+            if (dz_is_nan) {
+                LOG_WARNING(
+                    "determine_deltaz_for_photoncons: deltaz[%d] = %f is NaN after interpolation. "
+                    "Setting to 0.0 as fallback.",
+                    i + 1, deltaz[i + 1]);
+                deltaz[i + 1] = 0.0;
+            }
         }
     }
     // We have added the extrapolated values, now check if they are all increasing or not (again, to
@@ -689,12 +738,34 @@ void determine_deltaz_for_photoncons() {
             // Determine the delta z
             val2 = fabs(z_cal - z_analytic);
             deltaz[i + 1] = val2;
+            // Quick fix: Check if deltaz[i+1] is NaN and set to 0
+            unsigned long long *dz_bits = (unsigned long long *)&deltaz[i + 1];
+            int dz_is_nan = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                             (*dz_bits & 0x000fffffffffffffULL) != 0);
+            if (dz_is_nan) {
+                LOG_WARNING(
+                    "determine_deltaz_for_photoncons: deltaz[%d] = %f (val2) is NaN during "
+                    "extrapolation. Setting to 0.0 as fallback.",
+                    i + 1, deltaz[i + 1]);
+                deltaz[i + 1] = 0.0;
+            }
             counter += 1;
 
             // If after 100 samplings we couldn't get the value to increase (like it should), just
             // modify it from the previous point.
             if (counter == 100) {
                 deltaz[i + 1] = deltaz[i] * 1.01;
+                // Quick fix: Check if deltaz[i+1] is NaN after fallback computation
+                unsigned long long *dz_bits = (unsigned long long *)&deltaz[i + 1];
+                int dz_is_nan = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                                 (*dz_bits & 0x000fffffffffffffULL) != 0);
+                if (dz_is_nan) {
+                    LOG_WARNING(
+                        "determine_deltaz_for_photoncons: deltaz[%d] = %f is NaN after fallback "
+                        "computation (deltaz[%d] * 1.01). Setting to 0.0 as fallback.",
+                        i + 1, deltaz[i + 1], i);
+                    deltaz[i + 1] = 0.0;
+                }
             }
         }
     }
@@ -734,6 +805,17 @@ void determine_deltaz_for_photoncons() {
         // We are at the end-points, cannot smooth
         if (i == 0 || i == (N_NFsamples + N_extrapolated)) {
             deltaz[i] = deltaz_smoothed[i];
+            // Quick fix: Check if deltaz[i] is NaN after copying from smoothed array
+            unsigned long long *dz_bits = (unsigned long long *)&deltaz[i];
+            int dz_is_nan = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                             (*dz_bits & 0x000fffffffffffffULL) != 0);
+            if (dz_is_nan) {
+                LOG_WARNING(
+                    "determine_deltaz_for_photoncons: deltaz[%d] = %f is NaN after copying from "
+                    "deltaz_smoothed[%d]. Setting to 0.0 as fallback.",
+                    i, deltaz[i], i);
+                deltaz[i] = 0.0;
+            }
         } else {
             deltaz[i] = 0.;
 
@@ -765,6 +847,18 @@ void determine_deltaz_for_photoncons() {
                 }
             }
             deltaz[i] /= (float)counter;
+
+            // Quick fix: Check if deltaz[i] is NaN after smoothing and set to 0
+            unsigned long long *dz_bits = (unsigned long long *)&deltaz[i];
+            int dz_is_nan = ((*dz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                             (*dz_bits & 0x000fffffffffffffULL) != 0);
+            if (dz_is_nan) {
+                LOG_WARNING(
+                    "determine_deltaz_for_photoncons: deltaz[%d] = %f is NaN after smoothing. "
+                    "Setting to 0.0 as fallback.",
+                    i, deltaz[i]);
+                deltaz[i] = 0.0;
+            }
         }
     }
 
