@@ -71,8 +71,6 @@ class _PhotonConservationState:
     """Singleton class which contains the state of the photon-conservation model."""
 
     calibration_inputs: InputParameters | None = None
-    calibration_redshifts: np.ndarray | None = None
-    calibration_nf: np.ndarray | None = None
 
     @property
     def c_memory_allocated(self) -> bool:
@@ -117,76 +115,6 @@ def _calc_zstart_photon_cons():
     from ._utils import _call_c_simple
 
     return _call_c_simple(lib.ComputeZstart_PhotonCons)
-
-
-def get_photoncons_calibration_data() -> dict | None:
-    """
-    Get the photon conservation calibration data for broadcasting to MPI workers.
-
-    Returns
-    -------
-    dict or None
-        Dictionary containing 'redshifts' and 'neutral_fractions' arrays,
-        or None if calibration has not been performed.
-
-    Notes
-    -----
-    In MPI environments, run this on the main process after `setup_photon_cons()`
-    and broadcast the result to all workers. Each worker should then call
-    `init_photoncons_from_calibration_data()` with this data.
-    """
-    if _photoncons_state.calibration_redshifts is None:
-        return None
-    return {
-        "redshifts": _photoncons_state.calibration_redshifts,
-        "neutral_fractions": _photoncons_state.calibration_nf,
-        "inputs": _photoncons_state.calibration_inputs,
-    }
-
-
-def init_photoncons_from_calibration_data(
-    calibration_data: dict, inputs: "InputParameters"
-):
-    """
-    Initialize photon conservation on an MPI worker using calibration data.
-
-    Parameters
-    ----------
-    calibration_data : dict
-        Dictionary from `get_photoncons_calibration_data()` containing
-        'redshifts' and 'neutral_fractions' arrays.
-    inputs : InputParameters
-        The input parameters for the simulation.
-
-    Notes
-    -----
-    This function should be called on each MPI worker process before running
-    simulations with photon conservation enabled. The calibration_data should
-    be broadcast from the main process that ran `setup_photon_cons()`.
-    """
-    if calibration_data is None:
-        raise ValueError(
-            "calibration_data is None. Run setup_photon_cons() on main process first."
-        )
-
-    redshifts = calibration_data["redshifts"]
-    nf = calibration_data["neutral_fractions"]
-
-    # Store in state
-    _photoncons_state.calibration_redshifts = redshifts
-    _photoncons_state.calibration_nf = nf
-    _photoncons_state.calibration_inputs = inputs
-
-    # Initialize the analytic expression (needed for Q_at_z spline)
-    _init_photon_conservation_correction(inputs=inputs)
-
-    # Initialize the calibration spline
-    _calibrate_photon_conservation_correction(
-        redshifts_estimate=redshifts,
-        nf_estimate=nf,
-        NSpline=len(redshifts),
-    )
-    logger.info("Photon conservation initialized from calibration data on worker.")
 
 
 def _get_photon_nonconservation_data() -> dict:
@@ -434,10 +362,6 @@ def calibrate_photon_cons(
 
     fast_node_redshifts = np.array(fast_node_redshifts[::-1])
     neutral_fraction_photon_cons = np.array(neutral_fraction_photon_cons[::-1])
-
-    # Store calibration data so it can be reused on MPI workers
-    _photoncons_state.calibration_redshifts = fast_node_redshifts
-    _photoncons_state.calibration_nf = neutral_fraction_photon_cons
 
     # Construct the spline for the calibration curve
     logger.info("Calibrating photon conservation correction")

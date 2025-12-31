@@ -325,6 +325,17 @@ int PhotonCons_Calibration(double *z_estimate, double *xH_estimate, int NSpline)
         if (xH_estimate[NSpline - 1] > 0.0 && xH_estimate[NSpline - 2] > 0.0 &&
             xH_estimate[NSpline - 3] > 0.0 && xH_estimate[0] <= PhotonConsStart) {
             initialise_NFHistory_spline(z_estimate, xH_estimate, NSpline);
+        } else {
+            // Calibration conditions not met - throw error with diagnostic info
+            LOG_ERROR(
+                "PhotonCons_Calibration failed. Conditions not met: "
+                "xH[z_low]=%.4f (need >0), xH[z_low-1]=%.4f (need >0), "
+                "xH[z_low-2]=%.4f (need >0), xH[z_high]=%.4f (need <=%.4f). "
+                "This happens when reionization is too fast (fully ionized at low z) "
+                "or too slow (not started at high z). Adjust your astrophysical parameters.",
+                xH_estimate[NSpline - 1], xH_estimate[NSpline - 2], xH_estimate[NSpline - 3],
+                xH_estimate[0], PhotonConsStart);
+            Throw(PhotonConsError);
         }
     }
     Catch(status) { return status; }
@@ -730,13 +741,11 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             // Reionisation has already happened well before the calibration
             adjusted_redshift = *redshift;
         } else if (!NFHistory_spline_initialized) {
-            // NFHistory spline was not initialized. This typically happens when running
-            // with MPI and PhotonCons_Calibration was only called on the main process.
-            // Each MPI worker needs to call PhotonCons_Calibration with the calibration data.
+            // NFHistory spline was not initialized - this should not happen
+            // if PhotonCons_Calibration was called successfully
             LOG_ERROR(
-                "NFHistory spline not initialized. When using MPI with photon conservation, "
-                "ensure PhotonCons_Calibration is called on each worker process with the "
-                "calibration data before running simulations.");
+                "NFHistory spline not initialized. PhotonCons_Calibration must be "
+                "called before using photon conservation.");
             Throw(PhotonConsError);
         } else {
 // Initialise the photon non-conservation correction curve
@@ -795,11 +804,10 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             }
         }
     } else if (!NFHistory_spline_initialized) {
-        // NFHistory spline was not initialized. This typically happens when running
-        // with MPI and PhotonCons_Calibration was only called on the main process.
+        // NFHistory spline was not initialized - this should not happen
         LOG_ERROR(
-            "NFHistory spline not initialized. When using MPI with photon conservation, "
-            "ensure PhotonCons_Calibration is called on each worker process.");
+            "NFHistory spline not initialized. PhotonCons_Calibration must be "
+            "called before using photon conservation.");
         Throw(PhotonConsError);
     } else {
 // Initialise the photon non-conservation correction curve
