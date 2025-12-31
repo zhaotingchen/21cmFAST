@@ -7,6 +7,7 @@
 #include <gsl/gsl_roots.h>
 #include <gsl/gsl_spline.h>
 #include <math.h>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -1315,30 +1316,44 @@ double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
     double ans;
     static double dEC[nT * nT * ngp];
     static double dEI[nT * nT * ngp];
+    static int lya_heating_initialized = 0;
     int ii, jj, kk, index;
     FILE *F;
 
     char filename[500];
 
     if (flag == 1) {
-        // Read in the Lya heating table
-        sprintf(filename, "%s/%s", config_settings.external_table_path, LYA_HEATING_FILENAME);
+        // Thread-safe initialization: use critical section to prevent multiple
+        // threads from simultaneously reading into the static arrays
+#pragma omp critical(lya_heating_init)
+        {
+            if (!lya_heating_initialized) {
+                LOG_DEBUG("Energy_Lya_heating: Actually reading file (first time)");
+                // Read in the Lya heating table
+                sprintf(filename, "%s/%s", config_settings.external_table_path,
+                        LYA_HEATING_FILENAME);
 
-        if (!(F = fopen(filename, "r"))) {
-            LOG_ERROR("Energy_Lya_heating: Unable to open file: %s for reading.", filename);
-            Throw(IOError);
-        }
-
-        for (ii = 0; ii < nT; ii++) {
-            for (jj = 0; jj < nT; jj++) {
-                for (kk = 0; kk < ngp; kk++) {
-                    index = ii * nT * ngp + jj * ngp + kk;
-                    fscanf(F, "%lf %lf", &dEC[index], &dEI[index]);
+                if (!(F = fopen(filename, "r"))) {
+                    LOG_ERROR("Energy_Lya_heating: Unable to open file: %s for reading.", filename);
+                    Throw(IOError);
                 }
+
+                for (ii = 0; ii < nT; ii++) {
+                    for (jj = 0; jj < nT; jj++) {
+                        for (kk = 0; kk < ngp; kk++) {
+                            index = ii * nT * ngp + jj * ngp + kk;
+                            fscanf(F, "%lf %lf", &dEC[index], &dEI[index]);
+                        }
+                    }
+                }
+
+                fclose(F);
+                lya_heating_initialized = 1;
+                LOG_DEBUG("Energy_Lya_heating: File read complete, initialized=1");
+            } else {
+                LOG_SUPER_DEBUG("Energy_Lya_heating: Already initialized, skipping file read");
             }
         }
-
-        fclose(F);
         return 0;
     }
 
