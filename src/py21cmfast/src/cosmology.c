@@ -46,6 +46,7 @@ struct CosmoConstants {
 };
 
 static struct CosmoConstants cosmo_consts;
+static int ps_initialized = 0;  // Thread-safety flag
 
 // NOTE: All Transfer functions take k in Mpc^-1, and convert to hMpc^-1 internally
 //  FUNCTION TFmdm is the power spectrum transfer function from Eisenstein & Hu ApJ, 1999, 511, 5
@@ -448,66 +449,90 @@ void init_ps() {
     double result, error, lower_limit, upper_limit;
     gsl_function F;
     double rel_tol = FRACT_FLOAT_ERR * 10;  //<- relative tolerance
-    gsl_integration_workspace *w = gsl_integration_workspace_alloc(1000);
+    gsl_integration_workspace *w;
 
-    // Set cuttoff scale for WDM (eq. 4 in Barkana et al. 2001) in comoving Mpc
-    // R_CUTOFF =
-    // 0.201*pow((cosmo_params_global->OMm-cosmo_params_global->OMb)
-    // *cosmo_params_global->hlittle*cosmo_params_global->hlittle/0.15,
-    // 0.15)*pow(.g_x/1.5, -0.29)*pow(.M_WDM, -1.15);
+// Thread-safe initialization: only one thread initializes, others wait
+#pragma omp critical(init_ps)
+    {
+        if (!ps_initialized) {
+            w = gsl_integration_workspace_alloc(1000);
+            if (w == NULL) {
+                LOG_ERROR("init_ps: Failed to allocate GSL integration workspace.");
+                Throw(MemoryAllocError);
+            }
 
-    cosmo_consts.omhh =
-        cosmo_params_global->OMm * cosmo_params_global->hlittle * cosmo_params_global->hlittle;
-    cosmo_consts.theta_cmb = physconst.T_cmb / 2.7;
+            // Set cuttoff scale for WDM (eq. 4 in Barkana et al. 2001) in comoving Mpc
+            // R_CUTOFF =
+            // 0.201*pow((cosmo_params_global->OMm-cosmo_params_global->OMb)
+            // *cosmo_params_global->hlittle*cosmo_params_global->hlittle/0.15,
+            // 0.15)*pow(.g_x/1.5, -0.29)*pow(.M_WDM, -1.15);
 
-    cosmo_consts.f_nu = fmax(cosmo_params_global->OMn / cosmo_params_global->OMm, 1e-10);
-    cosmo_consts.f_baryon = fmax(cosmo_params_global->OMb / cosmo_params_global->OMm, 1e-10);
+            cosmo_consts.omhh = cosmo_params_global->OMm * cosmo_params_global->hlittle *
+                                cosmo_params_global->hlittle;
+            cosmo_consts.theta_cmb = physconst.T_cmb / 2.7;
 
-    TFset_parameters();
+            cosmo_consts.f_nu = fmax(cosmo_params_global->OMn / cosmo_params_global->OMm, 1e-10);
+            cosmo_consts.f_baryon =
+                fmax(cosmo_params_global->OMb / cosmo_params_global->OMm, 1e-10);
 
-    cosmo_consts.sigma_norm = -1;
+            TFset_parameters();
 
-    // we start the interpolator if using CLASS:
-    if (matter_options_global->POWER_SPECTRUM == 5) {
-        LOG_DEBUG("Setting CLASS Transfer Function inits.");
-        transfer_function_CLASS(1.0, 0, 0);
+            cosmo_consts.sigma_norm = -1;
+
+            // we start the interpolator if using CLASS:
+            if (matter_options_global->POWER_SPECTRUM == 5) {
+                LOG_DEBUG("Setting CLASS Transfer Function inits.");
+                transfer_function_CLASS(1.0, 0, 0);
+            }
+
+            double Radius_8;
+            Radius_8 = 8.0 / cosmo_params_global->hlittle;
+
+            lower_limit = 1.0e-99 / Radius_8;  // kstart
+            upper_limit = 350.0 / Radius_8;    // kend
+
+            struct SigmaIntegralParams sigma_params = {
+                .radius = Radius_8, .filter_type = matter_options_global->FILTER};
+            F.function = &dsigma_dk;
+            F.params = &sigma_params;
+
+            LOG_DEBUG(
+                "Initializing Power Spectrum with lower_limit=%e, upper_limit=%e, rel_tol=%e, "
+                "radius_8=%g",
+                lower_limit, upper_limit, rel_tol, Radius_8);
+            int status;
+
+            gsl_set_error_handler_off();
+
+            status = gsl_integration_qag(&F, lower_limit, upper_limit, 0, rel_tol, 1000,
+                                         GSL_INTEG_GAUSS61, w, &result, &error);
+
+            if (status != 0) {
+                gsl_integration_workspace_free(w);
+                LOG_ERROR("gsl integration error occured!");
+                LOG_ERROR(
+                    "(function argument): lower_limit=%e upper_limit=%e rel_tol=%e result=%e "
+                    "error=%e",
+                    lower_limit, upper_limit, rel_tol, result, error);
+                CATCH_GSL_ERROR(status);
+            }
+
+            gsl_integration_workspace_free(w);
+
+            LOG_DEBUG("Initialized Power Spectrum.");
+
+            cosmo_consts.sigma_norm =
+                cosmo_params_global->SIGMA_8 / sqrt(result);  // takes care of volume factor
+            ps_initialized = 1;
+        }
     }
 
-    double Radius_8;
-    Radius_8 = 8.0 / cosmo_params_global->hlittle;
-
-    lower_limit = 1.0e-99 / Radius_8;  // kstart
-    upper_limit = 350.0 / Radius_8;    // kend
-
-    struct SigmaIntegralParams sigma_params = {.radius = Radius_8,
-                                               .filter_type = matter_options_global->FILTER};
-    F.function = &dsigma_dk;
-    F.params = &sigma_params;
-
-    LOG_DEBUG(
-        "Initializing Power Spectrum with lower_limit=%e, upper_limit=%e, rel_tol=%e, radius_8=%g",
-        lower_limit, upper_limit, rel_tol, Radius_8);
-    int status;
-
-    gsl_set_error_handler_off();
-
-    status = gsl_integration_qag(&F, lower_limit, upper_limit, 0, rel_tol, 1000, GSL_INTEG_GAUSS61,
-                                 w, &result, &error);
-
-    if (status != 0) {
-        LOG_ERROR("gsl integration error occured!");
-        LOG_ERROR(
-            "(function argument): lower_limit=%e upper_limit=%e rel_tol=%e result=%e error=%e",
-            lower_limit, upper_limit, rel_tol, result, error);
-        CATCH_GSL_ERROR(status);
+    // Verify initialization completed
+    if (!ps_initialized) {
+        LOG_ERROR("init_ps: Initialization failed or incomplete.");
+        Throw(ValueError);
     }
 
-    gsl_integration_workspace_free(w);
-
-    LOG_DEBUG("Initialized Power Spectrum.");
-
-    cosmo_consts.sigma_norm =
-        cosmo_params_global->SIGMA_8 / sqrt(result);  // takes care of volume factor
     return;
 }
 

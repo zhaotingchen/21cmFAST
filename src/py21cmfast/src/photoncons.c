@@ -20,6 +20,7 @@
 #include <gsl/gsl_interp.h>
 #include <gsl/gsl_spline.h>
 #include <math.h>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -449,8 +450,21 @@ void determine_deltaz_for_photoncons() {
         // Now, we can construct the spline of the photon non-conservation correction (delta z as a
         // function of neutral fraction)
         deltaz_spline_for_photoncons_acc = gsl_interp_accel_alloc();
+        if (deltaz_spline_for_photoncons_acc == NULL) {
+            LOG_ERROR(
+                "determine_deltaz_for_photoncons: Failed to allocate GSL interpolation "
+                "accelerator.");
+            Throw(MemoryAllocError);
+        }
+
         deltaz_spline_for_photoncons =
             gsl_spline_alloc(gsl_interp_linear, N_NFsamples + N_extrapolated + 1);
+        if (deltaz_spline_for_photoncons == NULL) {
+            gsl_interp_accel_free(deltaz_spline_for_photoncons_acc);
+            deltaz_spline_for_photoncons_acc = NULL;
+            LOG_ERROR("determine_deltaz_for_photoncons: Failed to allocate GSL spline.");
+            Throw(MemoryAllocError);
+        }
 
         gsl_set_error_handler_off();
         int gsl_status;
@@ -676,8 +690,20 @@ void determine_deltaz_for_photoncons() {
     // Now, we can construct the spline of the photon non-conservation correction (delta z as a
     // function of neutral fraction)
     deltaz_spline_for_photoncons_acc = gsl_interp_accel_alloc();
+    if (deltaz_spline_for_photoncons_acc == NULL) {
+        LOG_ERROR(
+            "determine_deltaz_for_photoncons: Failed to allocate GSL interpolation accelerator.");
+        Throw(MemoryAllocError);
+    }
+
     deltaz_spline_for_photoncons =
         gsl_spline_alloc(gsl_interp_linear, N_NFsamples + N_extrapolated + 1);
+    if (deltaz_spline_for_photoncons == NULL) {
+        gsl_interp_accel_free(deltaz_spline_for_photoncons_acc);
+        deltaz_spline_for_photoncons_acc = NULL;
+        LOG_ERROR("determine_deltaz_for_photoncons: Failed to allocate GSL spline.");
+        Throw(MemoryAllocError);
+    }
 
     gsl_set_error_handler_off();
     int gsl_status;
@@ -728,12 +754,23 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             // Reionisation has already happened well before the calibration
             adjusted_redshift = *redshift;
         } else {
-            // Initialise the photon non-conservation correction curve
-            // It is possible that for certain parameter choices that we can get here without
-            // initialisation happening. Thus check and initialise if not already done so
-            if (!photon_cons_allocated) {
-                determine_deltaz_for_photoncons();
-                photon_cons_allocated = true;
+// Initialise the photon non-conservation correction curve
+// It is possible that for certain parameter choices that we can get here without
+// initialisation happening. Thus check and initialise if not already done so
+// Thread-safe initialization: only one thread initializes, others wait
+#pragma omp critical(photoncons_init)
+            {
+                if (!photon_cons_allocated) {
+                    determine_deltaz_for_photoncons();
+                    photon_cons_allocated = true;
+                }
+            }
+
+            // Safety check: ensure spline is initialized before use
+            if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL ||
+                deltaz_spline_for_photoncons_acc == NULL) {
+                LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
+                Throw(PhotonConsError);
             }
 
             // We have crossed the NF threshold for the photon conservation correction so now set to
@@ -781,10 +818,21 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             }
         }
     } else {
-        // Initialise the photon non-conservation correction curve
-        if (!photon_cons_allocated) {
-            determine_deltaz_for_photoncons();
-            photon_cons_allocated = true;
+// Initialise the photon non-conservation correction curve
+// Thread-safe initialization: only one thread initializes, others wait
+#pragma omp critical(photoncons_init)
+        {
+            if (!photon_cons_allocated) {
+                determine_deltaz_for_photoncons();
+                photon_cons_allocated = true;
+            }
+        }
+
+        // Safety check: ensure spline is initialized before use
+        if (!photon_cons_allocated || deltaz_spline_for_photoncons == NULL ||
+            deltaz_spline_for_photoncons_acc == NULL) {
+            LOG_ERROR("adjust_redshifts_for_photoncons: Spline not properly initialized.");
+            Throw(PhotonConsError);
         }
 
         // We have exceeded even the end-point of the extrapolation
@@ -829,6 +877,12 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
         } else {
             // Find the corresponding redshift for the calibration curve given the required neutral
             // fraction (filling factor) from the analytic expression
+            // Additional safety check before using spline
+            if (deltaz_spline_for_photoncons == NULL || deltaz_spline_for_photoncons_acc == NULL) {
+                LOG_ERROR(
+                    "adjust_redshifts_for_photoncons: Spline is NULL when trying to evaluate.");
+                Throw(PhotonConsError);
+            }
             *absolute_delta_z = gsl_spline_eval(deltaz_spline_for_photoncons, (double)required_NF,
                                                 deltaz_spline_for_photoncons_acc);
             adjusted_redshift = (*redshift) - (*absolute_delta_z);
@@ -1010,8 +1064,16 @@ void FreePhotonConsMemory() {
     gsl_interp_accel_free(NFHistory_spline_acc);
     gsl_spline_free(z_NFHistory_spline);
     gsl_interp_accel_free(z_NFHistory_spline_acc);
-    gsl_spline_free(deltaz_spline_for_photoncons);
-    gsl_interp_accel_free(deltaz_spline_for_photoncons_acc);
+
+    // Safely free deltaz spline (handle NULL pointers)
+    if (deltaz_spline_for_photoncons != NULL) {
+        gsl_spline_free(deltaz_spline_for_photoncons);
+        deltaz_spline_for_photoncons = NULL;
+    }
+    if (deltaz_spline_for_photoncons_acc != NULL) {
+        gsl_interp_accel_free(deltaz_spline_for_photoncons_acc);
+        deltaz_spline_for_photoncons_acc = NULL;
+    }
     LOG_DEBUG("Done Freeing photon cons memory.");
 
     photon_cons_allocated = false;

@@ -10,6 +10,7 @@
 #include <gsl/gsl_roots.h>
 #include <gsl/gsl_spline.h>
 #include <math.h>
+#include <omp.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -99,11 +100,15 @@ void initialise_SFRD_spline(int Nbin, float zmin, float zmax, ScalingConstants *
     double lnMmax = log(Mmax);
 
     LOG_SUPER_DEBUG("initing SFRD spline from %.2f to %.2f", zmin, zmax);
-    if (!SFRD_z_table.allocated) {
-        allocate_RGTable1D(Nbin, &SFRD_z_table);
-    }
-    if (astro_options_global->USE_MINI_HALOS && !SFRD_z_table_MINI.allocated) {
-        allocate_RGTable2D(Nbin, NMTURN, &SFRD_z_table_MINI);
+// Thread-safe allocation check
+#pragma omp critical(sfrd_table_alloc)
+    {
+        if (!SFRD_z_table.allocated) {
+            allocate_RGTable1D(Nbin, &SFRD_z_table);
+        }
+        if (astro_options_global->USE_MINI_HALOS && !SFRD_z_table_MINI.allocated) {
+            allocate_RGTable2D(Nbin, NMTURN, &SFRD_z_table_MINI);
+        }
     }
 
     SFRD_z_table.x_min = zmin;
@@ -167,11 +172,15 @@ void initialise_Nion_Ts_spline(int Nbin, float zmin, float zmax, ScalingConstant
 
     LOG_SUPER_DEBUG("initing Nion spline from %.2f to %.2f", zmin, zmax);
 
-    if (!Nion_z_table.allocated) {
-        allocate_RGTable1D(Nbin, &Nion_z_table);
-    }
-    if (astro_options_global->USE_MINI_HALOS && !Nion_z_table_MINI.allocated) {
-        allocate_RGTable2D(Nbin, NMTURN, &Nion_z_table_MINI);
+// Thread-safe allocation check
+#pragma omp critical(nion_table_alloc)
+    {
+        if (!Nion_z_table.allocated) {
+            allocate_RGTable1D(Nbin, &Nion_z_table);
+        }
+        if (astro_options_global->USE_MINI_HALOS && !Nion_z_table_MINI.allocated) {
+            allocate_RGTable2D(Nbin, NMTURN, &Nion_z_table_MINI);
+        }
     }
     Nion_z_table.x_min = zmin;
     Nion_z_table.x_width = (zmax - zmin) / ((double)Nbin - 1.);

@@ -1666,18 +1666,7 @@ class InputParameters:
                 "update of M_TURN",
                 stacklevel=2,
             )
-            if (
-                self.astro_options.USE_MASS_DEPENDENT_ZETA
-                and val.BETA_ESC != 0
-                and self.astro_options.PHOTON_CONS_TYPE
-                not in ["no-photoncons", "alpha-photoncons"]
-            ):
-                warnings.warn(
-                    f"You have set BETA_ESC != 0 but PHOTON_CONS_TYPE is {self.astro_options.PHOTON_CONS_TYPE}. "
-                    "This changes the escape fraction so it is not consistent with the manual setting of scaling."
-                    "Set PHOTON_CONS_TYPE to 'no-photoncons' or 'alpha-photoncons' if you want the scaling to be exact.",
-                    stacklevel=2,
-                )
+            # if (
 
         if (
             self.astro_options.HII_FILTER == "sharp-k"

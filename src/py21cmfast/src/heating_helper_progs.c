@@ -7,6 +7,7 @@
 #include <gsl/gsl_roots.h>
 #include <gsl/gsl_spline.h>
 #include <math.h>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -94,6 +95,7 @@ double T_RECFAST(float z, int flag) {
     static double zt[RECFAST_NPTS], TK[RECFAST_NPTS];
     static gsl_interp_accel *acc;
     static gsl_spline *spline;
+    static int trecfast_initialized = 0;  // Thread-safety flag
     float currz, currTK, trash;
     int i;
     FILE *F;
@@ -101,24 +103,55 @@ double T_RECFAST(float z, int flag) {
     char filename[500];
 
     if (flag == 1) {
-        // Read in the recfast data
-        sprintf(filename, "%s/%s", config_settings.external_table_path, RECFAST_FILENAME);
-        if (!(F = fopen(filename, "r"))) {
-            LOG_ERROR("T_RECFAST: Unable to open file: %s for reading.", filename);
-            Throw(IOError);
+// Thread-safe initialization: only one thread initializes, others wait
+#pragma omp critical(trecfast_init)
+        {
+            if (!trecfast_initialized) {
+                // Read in the recfast data
+                sprintf(filename, "%s/%s", config_settings.external_table_path, RECFAST_FILENAME);
+                if (!(F = fopen(filename, "r"))) {
+                    LOG_ERROR("T_RECFAST: Unable to open file: %s for reading.", filename);
+                    Throw(IOError);
+                }
+
+                for (i = (RECFAST_NPTS - 1); i >= 0; i--) {
+                    fscanf(F, "%f %E %E %E", &currz, &trash, &trash, &currTK);
+                    zt[i] = currz;
+                    TK[i] = currTK;
+                }
+                fclose(F);
+
+                // Set up spline table
+                acc = gsl_interp_accel_alloc();
+                if (acc == NULL) {
+                    LOG_ERROR("T_RECFAST: Failed to allocate GSL interpolation accelerator.");
+                    Throw(MemoryAllocError);
+                }
+                spline = gsl_spline_alloc(gsl_interp_cspline, RECFAST_NPTS);
+                if (spline == NULL) {
+                    gsl_interp_accel_free(acc);
+                    acc = NULL;
+                    LOG_ERROR("T_RECFAST: Failed to allocate GSL spline.");
+                    Throw(MemoryAllocError);
+                }
+                int gsl_status = gsl_spline_init(spline, zt, TK, RECFAST_NPTS);
+                if (gsl_status != 0) {
+                    gsl_spline_free(spline);
+                    gsl_interp_accel_free(acc);
+                    spline = NULL;
+                    acc = NULL;
+                    LOG_ERROR("T_RECFAST: Failed to initialize GSL spline.");
+                    CATCH_GSL_ERROR(gsl_status);
+                }
+                trecfast_initialized = 1;
+            }
         }
 
-        for (i = (RECFAST_NPTS - 1); i >= 0; i--) {
-            fscanf(F, "%f %E %E %E", &currz, &trash, &trash, &currTK);
-            zt[i] = currz;
-            TK[i] = currTK;
+        // Verify initialization completed
+        if (!trecfast_initialized || spline == NULL || acc == NULL) {
+            LOG_ERROR("T_RECFAST: Initialization failed or incomplete.");
+            return -1;
         }
-        fclose(F);
-
-        // Set up spline table
-        acc = gsl_interp_accel_alloc();
-        spline = gsl_spline_alloc(gsl_interp_cspline, RECFAST_NPTS);
-        gsl_spline_init(spline, zt, TK, RECFAST_NPTS);
 
         return 0;
     }
@@ -130,8 +163,14 @@ double T_RECFAST(float z, int flag) {
         return 0;
     }
 
+    // Safety check: ensure spline is initialized before use
+    if (!trecfast_initialized || spline == NULL || acc == NULL) {
+        LOG_ERROR("T_RECFAST: Spline not initialized. Call with flag=1 first.");
+        Throw(ValueError);
+    }
+
     if (z > zt[RECFAST_NPTS - 1]) {  // Called at z>500! Bail out
-        LOG_ERROR("Called xion_RECFAST with z=%f.", z);
+        LOG_ERROR("Called T_RECFAST with z=%f.", z);
         Throw 1;
     } else {  // Do spline
         ans = gsl_spline_eval(spline, z, acc);
@@ -144,6 +183,7 @@ double xion_RECFAST(float z, int flag) {
     static double zt[RECFAST_NPTS], xion[RECFAST_NPTS];
     static gsl_interp_accel *acc;
     static gsl_spline *spline;
+    static int xionrecfast_initialized = 0;  // Thread-safety flag
     float trash, currz, currxion;
     double ans;
     int i;
@@ -152,24 +192,56 @@ double xion_RECFAST(float z, int flag) {
     char filename[500];
 
     if (flag == 1) {
-        // Initialize vectors
-        sprintf(filename, "%s/%s", config_settings.external_table_path, RECFAST_FILENAME);
-        if (!(F = fopen(filename, "r"))) {
-            LOG_ERROR("xion_RECFAST: Unable to open file: %s for reading.", RECFAST_FILENAME);
-            Throw IOError;
+// Thread-safe initialization: only one thread initializes, others wait
+#pragma omp critical(xionrecfast_init)
+        {
+            if (!xionrecfast_initialized) {
+                // Initialize vectors
+                sprintf(filename, "%s/%s", config_settings.external_table_path, RECFAST_FILENAME);
+                if (!(F = fopen(filename, "r"))) {
+                    LOG_ERROR("xion_RECFAST: Unable to open file: %s for reading.",
+                              RECFAST_FILENAME);
+                    Throw IOError;
+                }
+
+                for (i = (RECFAST_NPTS - 1); i >= 0; i--) {
+                    fscanf(F, "%f %E %E %E", &currz, &currxion, &trash, &trash);
+                    zt[i] = currz;
+                    xion[i] = currxion;
+                }
+                fclose(F);
+
+                // Set up spline table
+                acc = gsl_interp_accel_alloc();
+                if (acc == NULL) {
+                    LOG_ERROR("xion_RECFAST: Failed to allocate GSL interpolation accelerator.");
+                    Throw(MemoryAllocError);
+                }
+                spline = gsl_spline_alloc(gsl_interp_cspline, RECFAST_NPTS);
+                if (spline == NULL) {
+                    gsl_interp_accel_free(acc);
+                    acc = NULL;
+                    LOG_ERROR("xion_RECFAST: Failed to allocate GSL spline.");
+                    Throw(MemoryAllocError);
+                }
+                int gsl_status = gsl_spline_init(spline, zt, xion, RECFAST_NPTS);
+                if (gsl_status != 0) {
+                    gsl_spline_free(spline);
+                    gsl_interp_accel_free(acc);
+                    spline = NULL;
+                    acc = NULL;
+                    LOG_ERROR("xion_RECFAST: Failed to initialize GSL spline.");
+                    CATCH_GSL_ERROR(gsl_status);
+                }
+                xionrecfast_initialized = 1;
+            }
         }
 
-        for (i = (RECFAST_NPTS - 1); i >= 0; i--) {
-            fscanf(F, "%f %E %E %E", &currz, &currxion, &trash, &trash);
-            zt[i] = currz;
-            xion[i] = currxion;
+        // Verify initialization completed
+        if (!xionrecfast_initialized || spline == NULL || acc == NULL) {
+            LOG_ERROR("xion_RECFAST: Initialization failed or incomplete.");
+            return -1;
         }
-        fclose(F);
-
-        // Set up spline table
-        acc = gsl_interp_accel_alloc();
-        spline = gsl_spline_alloc(gsl_interp_cspline, RECFAST_NPTS);
-        gsl_spline_init(spline, zt, xion, RECFAST_NPTS);
 
         return 0;
     }
@@ -178,6 +250,12 @@ double xion_RECFAST(float z, int flag) {
         gsl_spline_free(spline);
         gsl_interp_accel_free(acc);
         return 0;
+    }
+
+    // Safety check: ensure spline is initialized before use
+    if (!xionrecfast_initialized || spline == NULL || acc == NULL) {
+        LOG_ERROR("xion_RECFAST: Spline not initialized. Call with flag=1 first.");
+        Throw(ValueError);
     }
 
     if (z > zt[RECFAST_NPTS - 1]) {  // Called at z>500! Bail out
@@ -270,6 +348,7 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
     static int n[NSPEC_MAX];
     static float nu_n[NSPEC_MAX], alpha_S_2[NSPEC_MAX];
     static float alpha_S_3[NSPEC_MAX], N0_2[NSPEC_MAX], N0_3[NSPEC_MAX];
+    static int spectral_emissivity_initialized = 0;  // Thread-safety flag
     double n0_fac;
     //  double ans, tot, lya;
     double result;
@@ -280,6 +359,11 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
 
     switch (flag) {
         case 2:
+            // Safety check: ensure arrays are initialized before use
+            if (!spectral_emissivity_initialized) {
+                LOG_ERROR("spectral_emissivity: Arrays not initialized. Call with flag=1 first.");
+                Throw(ValueError);
+            }
             // For LW calculateion. New in v1.5, see...
             for (i = 1; i < (NSPEC_MAX - 1); i++) {
                 if ((nu_norm >= nu_n[i]) && (nu_norm < nu_n[i + 1])) {
@@ -300,37 +384,56 @@ double spectral_emissivity(double nu_norm, int flag, int Population) {
             }
 
         case 1:
-            // * Read in the data * //
-            sprintf(filename, "%s/%s", config_settings.external_table_path,
-                    STELLAR_SPECTRA_FILENAME);
-            if (!(F = fopen(filename, "r"))) {
-                LOG_ERROR(
-                    "spectral_emissivity: Unable to open file: stellar_spectra.dat for reading.");
-                Throw IOError;
-            }
+// Thread-safe initialization: only one thread initializes, others wait
+#pragma omp critical(spectral_emissivity_init)
+        {
+            if (!spectral_emissivity_initialized) {
+                // * Read in the data * //
+                sprintf(filename, "%s/%s", config_settings.external_table_path,
+                        STELLAR_SPECTRA_FILENAME);
+                if (!(F = fopen(filename, "r"))) {
+                    LOG_ERROR(
+                        "spectral_emissivity: Unable to open file: stellar_spectra.dat for "
+                        "reading.");
+                    Throw IOError;
+                }
 
-            for (i = 1; i < NSPEC_MAX; i++) {
-                fscanf(F, "%i %e %e %e %e", &n[i], &N0_2[i], &alpha_S_2[i], &N0_3[i],
-                       &alpha_S_3[i]);
-                //      printf("%i\t%e\t%e\t%e\t%e\n", n[i], N0_2[i], alpha_S_2[i], N0_3[i],
-                //      alpha_S_3[i]);
-            }
-            fclose(F);
+                for (i = 1; i < NSPEC_MAX; i++) {
+                    fscanf(F, "%i %e %e %e %e", &n[i], &N0_2[i], &alpha_S_2[i], &N0_3[i],
+                           &alpha_S_3[i]);
+                    //      printf("%i\t%e\t%e\t%e\t%e\n", n[i], N0_2[i], alpha_S_2[i], N0_3[i],
+                    //      alpha_S_3[i]);
+                }
+                fclose(F);
 
-            for (i = 1; i < NSPEC_MAX; i++) {
-                nu_n[i] = 4.0 / 3.0 * (1.0 - 1.0 / pow(n[i], 2.0));
-            }
+                for (i = 1; i < NSPEC_MAX; i++) {
+                    nu_n[i] = 4.0 / 3.0 * (1.0 - 1.0 / pow(n[i], 2.0));
+                }
 
-            for (i = 1; i < (NSPEC_MAX - 1); i++) {
-                n0_fac = (pow(nu_n[i + 1], alpha_S_2[i] + 1) - pow(nu_n[i], alpha_S_2[i] + 1));
-                N0_2[i] *= (alpha_S_2[i] + 1) / n0_fac * astro_params_global->POP2_ION;
-                n0_fac = (pow(nu_n[i + 1], alpha_S_3[i] + 1) - pow(nu_n[i], alpha_S_3[i] + 1));
-                N0_3[i] *= (alpha_S_3[i] + 1) / n0_fac * astro_params_global->POP3_ION;
+                for (i = 1; i < (NSPEC_MAX - 1); i++) {
+                    n0_fac = (pow(nu_n[i + 1], alpha_S_2[i] + 1) - pow(nu_n[i], alpha_S_2[i] + 1));
+                    N0_2[i] *= (alpha_S_2[i] + 1) / n0_fac * astro_params_global->POP2_ION;
+                    n0_fac = (pow(nu_n[i + 1], alpha_S_3[i] + 1) - pow(nu_n[i], alpha_S_3[i] + 1));
+                    N0_3[i] *= (alpha_S_3[i] + 1) / n0_fac * astro_params_global->POP3_ION;
+                }
+                spectral_emissivity_initialized = 1;
+            }
+        }
+
+            // Verify initialization completed
+            if (!spectral_emissivity_initialized) {
+                LOG_ERROR("spectral_emissivity: Initialization failed or incomplete.");
+                return -1;
             }
 
             return 0.0;
 
         default:
+            // Safety check: ensure arrays are initialized before use
+            if (!spectral_emissivity_initialized) {
+                LOG_ERROR("spectral_emissivity: Arrays not initialized. Call with flag=1 first.");
+                Throw(ValueError);
+            }
             for (i = 1; i < (NSPEC_MAX - 1); i++) {
                 //    printf("checking between %e and %e\n", nu_n[i], nu_n[i+1]);
                 if ((nu_norm >= nu_n[i]) && (nu_norm < nu_n[i + 1])) {
@@ -1315,36 +1418,62 @@ double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
     double ans;
     static double dEC[nT * nT * ngp];
     static double dEI[nT * nT * ngp];
+    static int lya_heating_initialized = 0;  // Thread-safety flag
     int ii, jj, kk, index;
     FILE *F;
 
     char filename[500];
 
     if (flag == 1) {
-        // Read in the Lya heating table
-        sprintf(filename, "%s/%s", config_settings.external_table_path, LYA_HEATING_FILENAME);
+// Thread-safe initialization: only one thread initializes, others wait
+#pragma omp critical(lya_heating_init)
+        {
+            if (!lya_heating_initialized) {
+                // Read in the Lya heating table
+                sprintf(filename, "%s/%s", config_settings.external_table_path,
+                        LYA_HEATING_FILENAME);
 
-        if (!(F = fopen(filename, "r"))) {
-            LOG_ERROR("Energy_Lya_heating: Unable to open file: %s for reading.", filename);
-            Throw(IOError);
-        }
-
-        for (ii = 0; ii < nT; ii++) {
-            for (jj = 0; jj < nT; jj++) {
-                for (kk = 0; kk < ngp; kk++) {
-                    index = ii * nT * ngp + jj * ngp + kk;
-                    fscanf(F, "%lf %lf", &dEC[index], &dEI[index]);
+                if (!(F = fopen(filename, "r"))) {
+                    LOG_ERROR("Energy_Lya_heating: Unable to open file: %s for reading.", filename);
+                    Throw(IOError);
                 }
+
+                for (ii = 0; ii < nT; ii++) {
+                    for (jj = 0; jj < nT; jj++) {
+                        for (kk = 0; kk < ngp; kk++) {
+                            index = ii * nT * ngp + jj * ngp + kk;
+                            fscanf(F, "%lf %lf", &dEC[index], &dEI[index]);
+                        }
+                    }
+                }
+
+                fclose(F);
+                lya_heating_initialized = 1;
             }
         }
 
-        fclose(F);
+        // Verify initialization completed (critical section ensures memory visibility)
+        if (!lya_heating_initialized) {
+            LOG_ERROR("Energy_Lya_heating: Initialization failed or incomplete.");
+            return -1;
+        }
+
         return 0;
     }
 
     if (flag == 2) {
+        // Safety check: ensure arrays are initialized before use
+        if (!lya_heating_initialized) {
+            LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
+            Throw(ValueError);
+        }
         ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, dEC);  // For Continuum Flux
     } else if (flag == 3) {
+        // Safety check: ensure arrays are initialized before use
+        if (!lya_heating_initialized) {
+            LOG_ERROR("Energy_Lya_heating: Arrays not initialized. Call with flag=1 first.");
+            Throw(ValueError);
+        }
         ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, dEI);  // For Injected Flux
     } else {
         LOG_ERROR("invalid flag passed to Energy_Lya_heating");

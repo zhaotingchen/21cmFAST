@@ -4,6 +4,7 @@
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_interp.h>
 #include <gsl/gsl_spline.h>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -43,6 +44,7 @@ static gsl_interp_accel *RR_acc[RR_Z_NPTS];
 static gsl_spline *RR_spline[RR_Z_NPTS];
 
 static bool oob_warning_printed;
+static int mhr_initialized = 0;  // Thread-safety flag
 
 double recombination_rate(double z_eff, double gamma12_bg, double T4, int usecaseB);
 void free_MHR(); /* deallocates the gsl structures from init_MHR */
@@ -87,6 +89,12 @@ double splined_recombination_rate(double z_eff, double gamma12_bg) {
         }
     }
 
+    // Safety check: ensure splines are initialized before use
+    if (!mhr_initialized || RR_spline[z_ct] == NULL || RR_acc[z_ct] == NULL) {
+        LOG_ERROR("splined_recombination_rate: MHR not initialized. Call init_MHR() first.");
+        Throw(ValueError);
+    }
+
     return gsl_spline_eval(RR_spline[z_ct], lnGamma, RR_acc[z_ct]);
 }
 
@@ -94,30 +102,97 @@ void init_MHR() {
     int z_ct, gamma_ct;
     float z, gamma;
 
-    // first initialize the MHR parameter look up tables
-    init_C_MHR();    /*initializes the lookup table for the C parameter in MHR00 model*/
-    init_beta_MHR(); /*initializes the lookup table for the beta parameter in MHR00 model*/
-    init_A_MHR();    /*initializes the lookup table for the A parameter in MHR00 model*/
+// Thread-safe initialization: only one thread initializes, others wait
+#pragma omp critical(mhr_init)
+    {
+        if (!mhr_initialized) {
+            // first initialize the MHR parameter look up tables
+            init_C_MHR();    /*initializes the lookup table for the C parameter in MHR00 model*/
+            init_beta_MHR(); /*initializes the lookup table for the beta parameter in MHR00 model*/
+            init_A_MHR();    /*initializes the lookup table for the A parameter in MHR00 model*/
 
-    // now the recombination rate look up tables
-    for (z_ct = 0; z_ct < RR_Z_NPTS; z_ct++) {
-        z = z_ct * RR_DEL_Z;  // redshift corresponding to index z_ct of the array
+            // now the recombination rate look up tables
+            for (z_ct = 0; z_ct < RR_Z_NPTS; z_ct++) {
+                z = z_ct * RR_DEL_Z;  // redshift corresponding to index z_ct of the array
 
-        // Intialize the Gamma values
-        for (gamma_ct = 0; gamma_ct < RR_lnGamma_NPTS; gamma_ct++) {
-            lnGamma_values[gamma_ct] = RR_lnGamma_min + gamma_ct * RR_DEL_lnGamma;  // ln of Gamma12
-            gamma = exp(lnGamma_values[gamma_ct]);
-            RR_table[z_ct][gamma_ct] =
-                recombination_rate(z, gamma, 1, 1);  // CHANGE THIS TO INCLUDE TEMPERATURE
+                // Intialize the Gamma values
+                for (gamma_ct = 0; gamma_ct < RR_lnGamma_NPTS; gamma_ct++) {
+                    lnGamma_values[gamma_ct] =
+                        RR_lnGamma_min + gamma_ct * RR_DEL_lnGamma;  // ln of Gamma12
+                    gamma = exp(lnGamma_values[gamma_ct]);
+                    RR_table[z_ct][gamma_ct] =
+                        recombination_rate(z, gamma, 1, 1);  // CHANGE THIS TO INCLUDE TEMPERATURE
+                }
+
+                // set up the spline in gamma
+                RR_acc[z_ct] = gsl_interp_accel_alloc();
+                if (RR_acc[z_ct] == NULL) {
+                    LOG_ERROR(
+                        "init_MHR: Failed to allocate GSL interpolation accelerator for z_ct=%d.",
+                        z_ct);
+                    // Clean up already allocated splines
+                    for (int i = 0; i < z_ct; i++) {
+                        if (RR_spline[i] != NULL) {
+                            gsl_spline_free(RR_spline[i]);
+                            RR_spline[i] = NULL;
+                        }
+                        if (RR_acc[i] != NULL) {
+                            gsl_interp_accel_free(RR_acc[i]);
+                            RR_acc[i] = NULL;
+                        }
+                    }
+                    Throw(MemoryAllocError);
+                }
+                RR_spline[z_ct] = gsl_spline_alloc(gsl_interp_cspline, RR_lnGamma_NPTS);
+                if (RR_spline[z_ct] == NULL) {
+                    gsl_interp_accel_free(RR_acc[z_ct]);
+                    RR_acc[z_ct] = NULL;
+                    // Clean up already allocated splines
+                    for (int i = 0; i < z_ct; i++) {
+                        if (RR_spline[i] != NULL) {
+                            gsl_spline_free(RR_spline[i]);
+                            RR_spline[i] = NULL;
+                        }
+                        if (RR_acc[i] != NULL) {
+                            gsl_interp_accel_free(RR_acc[i]);
+                            RR_acc[i] = NULL;
+                        }
+                    }
+                    LOG_ERROR("init_MHR: Failed to allocate GSL spline for z_ct=%d.", z_ct);
+                    Throw(MemoryAllocError);
+                }
+                int gsl_status = gsl_spline_init(RR_spline[z_ct], lnGamma_values, RR_table[z_ct],
+                                                 RR_lnGamma_NPTS);
+                if (gsl_status != 0) {
+                    gsl_spline_free(RR_spline[z_ct]);
+                    gsl_interp_accel_free(RR_acc[z_ct]);
+                    RR_spline[z_ct] = NULL;
+                    RR_acc[z_ct] = NULL;
+                    // Clean up already allocated splines
+                    for (int i = 0; i < z_ct; i++) {
+                        if (RR_spline[i] != NULL) {
+                            gsl_spline_free(RR_spline[i]);
+                            RR_spline[i] = NULL;
+                        }
+                        if (RR_acc[i] != NULL) {
+                            gsl_interp_accel_free(RR_acc[i]);
+                            RR_acc[i] = NULL;
+                        }
+                    }
+                    LOG_ERROR("init_MHR: Failed to initialize GSL spline for z_ct=%d.", z_ct);
+                    CATCH_GSL_ERROR(gsl_status);
+                }
+            }  // go to next redshift
+            oob_warning_printed = false;
+            mhr_initialized = 1;
         }
+    }
 
-        // set up the spline in gamma
-        RR_acc[z_ct] = gsl_interp_accel_alloc();
-        RR_spline[z_ct] = gsl_spline_alloc(gsl_interp_cspline, RR_lnGamma_NPTS);
-        gsl_spline_init(RR_spline[z_ct], lnGamma_values, RR_table[z_ct], RR_lnGamma_NPTS);
-
-    }  // go to next redshift
-    oob_warning_printed = false;
+    // Verify initialization completed
+    if (!mhr_initialized) {
+        LOG_ERROR("init_MHR: Initialization failed or incomplete.");
+        Throw(ValueError);
+    }
 
     return;
 }
@@ -280,13 +355,37 @@ void init_A_MHR() {
 
     // Set up spline table
     A_acc = gsl_interp_accel_alloc();
+    if (A_acc == NULL) {
+        LOG_ERROR("init_A_MHR: Failed to allocate GSL interpolation accelerator.");
+        Throw(MemoryAllocError);
+    }
     A_spline = gsl_spline_alloc(gsl_interp_cspline, A_NPTS);
-    gsl_spline_init(A_spline, A_params, A_table, A_NPTS);
+    if (A_spline == NULL) {
+        gsl_interp_accel_free(A_acc);
+        A_acc = NULL;
+        LOG_ERROR("init_A_MHR: Failed to allocate GSL spline.");
+        Throw(MemoryAllocError);
+    }
+    int gsl_status = gsl_spline_init(A_spline, A_params, A_table, A_NPTS);
+    if (gsl_status != 0) {
+        gsl_spline_free(A_spline);
+        gsl_interp_accel_free(A_acc);
+        A_spline = NULL;
+        A_acc = NULL;
+        LOG_ERROR("init_A_MHR: Failed to initialize GSL spline.");
+        CATCH_GSL_ERROR(gsl_status);
+    }
 
     return;
 }
 
-double splined_A_MHR(double x) { return gsl_spline_eval(A_spline, x, A_acc); }
+double splined_A_MHR(double x) {
+    if (A_spline == NULL || A_acc == NULL) {
+        LOG_ERROR("splined_A_MHR: Spline not initialized. Call init_A_MHR() first.");
+        Throw(ValueError);
+    }
+    return gsl_spline_eval(A_spline, x, A_acc);
+}
 
 void free_A_MHR() {
     gsl_spline_free(A_spline);
@@ -327,13 +426,37 @@ void init_C_MHR() {
 
     // Set up spline table
     C_acc = gsl_interp_accel_alloc();
+    if (C_acc == NULL) {
+        LOG_ERROR("init_C_MHR: Failed to allocate GSL interpolation accelerator.");
+        Throw(MemoryAllocError);
+    }
     C_spline = gsl_spline_alloc(gsl_interp_cspline, C_NPTS);
-    gsl_spline_init(C_spline, C_params, C_table, C_NPTS);
+    if (C_spline == NULL) {
+        gsl_interp_accel_free(C_acc);
+        C_acc = NULL;
+        LOG_ERROR("init_C_MHR: Failed to allocate GSL spline.");
+        Throw(MemoryAllocError);
+    }
+    int gsl_status = gsl_spline_init(C_spline, C_params, C_table, C_NPTS);
+    if (gsl_status != 0) {
+        gsl_spline_free(C_spline);
+        gsl_interp_accel_free(C_acc);
+        C_spline = NULL;
+        C_acc = NULL;
+        LOG_ERROR("init_C_MHR: Failed to initialize GSL spline.");
+        CATCH_GSL_ERROR(gsl_status);
+    }
 
     return;
 }
 
-double splined_C_MHR(double x) { return gsl_spline_eval(C_spline, x, C_acc); }
+double splined_C_MHR(double x) {
+    if (C_spline == NULL || C_acc == NULL) {
+        LOG_ERROR("splined_C_MHR: Spline not initialized. Call init_C_MHR() first.");
+        Throw(ValueError);
+    }
+    return gsl_spline_eval(C_spline, x, C_acc);
+}
 
 void free_C_MHR() {
     gsl_spline_free(C_spline);
@@ -367,13 +490,37 @@ void init_beta_MHR() {
 
     // Set up spline table
     beta_acc = gsl_interp_accel_alloc();
+    if (beta_acc == NULL) {
+        LOG_ERROR("init_beta_MHR: Failed to allocate GSL interpolation accelerator.");
+        Throw(MemoryAllocError);
+    }
     beta_spline = gsl_spline_alloc(gsl_interp_cspline, beta_NPTS);
-    gsl_spline_init(beta_spline, beta_params, beta_table, beta_NPTS);
+    if (beta_spline == NULL) {
+        gsl_interp_accel_free(beta_acc);
+        beta_acc = NULL;
+        LOG_ERROR("init_beta_MHR: Failed to allocate GSL spline.");
+        Throw(MemoryAllocError);
+    }
+    int gsl_status = gsl_spline_init(beta_spline, beta_params, beta_table, beta_NPTS);
+    if (gsl_status != 0) {
+        gsl_spline_free(beta_spline);
+        gsl_interp_accel_free(beta_acc);
+        beta_spline = NULL;
+        beta_acc = NULL;
+        LOG_ERROR("init_beta_MHR: Failed to initialize GSL spline.");
+        CATCH_GSL_ERROR(gsl_status);
+    }
 
     return;
 }
 
-double splined_beta_MHR(double x) { return gsl_spline_eval(beta_spline, x, beta_acc); }
+double splined_beta_MHR(double x) {
+    if (beta_spline == NULL || beta_acc == NULL) {
+        LOG_ERROR("splined_beta_MHR: Spline not initialized. Call init_beta_MHR() first.");
+        Throw(ValueError);
+    }
+    return gsl_spline_eval(beta_spline, x, beta_acc);
+}
 
 void free_beta_MHR() {
     gsl_spline_free(beta_spline);
