@@ -1035,31 +1035,78 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
         } else {
             // Find the corresponding redshift for the calibration curve given the required neutral
             // fraction (filling factor) from the analytic expression
+            // Get spline range to validate input - GSL splines store x values in the spline object
+            // We need to check against NeutralFractions array bounds since GSL doesn't expose
+            // min/max directly
+            int N_spline = deltaz_spline_for_photoncons->size;
+            double spline_xmin = NeutralFractions[0];
+            double spline_xmax = NeutralFractions[N_spline - 1];
+
+            // Ensure spline is in ascending order (xmin < xmax)
+            if (spline_xmin > spline_xmax) {
+                double temp = spline_xmin;
+                spline_xmin = spline_xmax;
+                spline_xmax = temp;
+            }
+
             LOG_DEBUG(
                 "adjust_redshifts_for_photoncons: Evaluating spline for required_NF = %f "
-                "(NeutralFractions[0] = %f)",
-                required_NF, NeutralFractions[0]);
+                "(spline range: [%f, %f], N_spline = %d, NeutralFractions[0] = %f, "
+                "NeutralFractions[%d] = %f)",
+                required_NF, spline_xmin, spline_xmax, N_spline, NeutralFractions[0], N_spline - 1,
+                NeutralFractions[N_spline - 1]);
+
+            // Clamp required_NF to spline range to avoid out-of-range evaluation
+            double eval_NF = (double)required_NF;
+            if (eval_NF < spline_xmin) {
+                LOG_WARNING(
+                    "adjust_redshifts_for_photoncons: required_NF = %f is below spline minimum = "
+                    "%f, clamping",
+                    eval_NF, spline_xmin);
+                eval_NF = spline_xmin;
+            } else if (eval_NF > spline_xmax) {
+                LOG_WARNING(
+                    "adjust_redshifts_for_photoncons: required_NF = %f is above spline maximum = "
+                    "%f, clamping",
+                    eval_NF, spline_xmax);
+                eval_NF = spline_xmax;
+            }
+
             // Check the double result BEFORE storing in float to avoid NaN corruption
-            double delta_z_double =
-                gsl_spline_eval(deltaz_spline_for_photoncons, (double)required_NF,
-                                deltaz_spline_for_photoncons_acc);
-            // Check for NaN/inf using explicit comparison - check the double BEFORE float
-            // conversion
-            int is_nan_double = (delta_z_double != delta_z_double);
-            int is_finite_double = isfinite(delta_z_double);
-            int isnan_double = isnan(delta_z_double);
+            // Use memcpy to check raw bytes for NaN detection that works regardless of compiler
+            // optimizations
+            double delta_z_double = gsl_spline_eval(deltaz_spline_for_photoncons, eval_NF,
+                                                    deltaz_spline_for_photoncons_acc);
+
+            // Use multiple NaN detection methods - the value prints as "nan" but checks fail,
+            // suggesting a compiler optimization or special NaN representation
+            int is_nan_self_neq = (delta_z_double != delta_z_double);
+            int is_finite_check = isfinite(delta_z_double);
+            int isnan_check = isnan(delta_z_double);
+            // Check if value is exactly NaN by comparing raw representation
+            unsigned long long *nan_check_ptr = (unsigned long long *)&delta_z_double;
+            int is_nan_bitpattern =
+                (*nan_check_ptr == 0x7ff8000000000000ULL ||  // quiet NaN
+                 *nan_check_ptr == 0x7ff0000000000001ULL ||  // signaling NaN (range)
+                 (*nan_check_ptr & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                     (*nan_check_ptr & 0x000fffffffffffffULL) != 0);  // any NaN
 
             LOG_DEBUG(
                 "adjust_redshifts_for_photoncons: Spline evaluation result (double): delta_z = %f, "
-                "isfinite = %d, isnan = %d, (delta_z != delta_z) = %d",
-                delta_z_double, is_finite_double, isnan_double, is_nan_double);
+                "isfinite = %d, isnan = %d, (delta_z != delta_z) = %d, is_nan_bitpattern = %d, "
+                "raw_bits = 0x%016llx",
+                delta_z_double, is_finite_check, isnan_check, is_nan_self_neq, is_nan_bitpattern,
+                *nan_check_ptr);
 
-            if (!is_finite_double || is_nan_double || isnan_double) {
+            // Check if value is NaN using ALL methods - if ANY detects NaN, it's invalid
+            if (!is_finite_check || is_nan_self_neq || isnan_check || is_nan_bitpattern) {
                 LOG_ERROR(
                     "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
-                    "delta_z = %f (double) for required_NF = %f (isfinite=%d, isnan=%d, "
-                    "self_neq=%d)",
-                    delta_z_double, required_NF, is_finite_double, isnan_double, is_nan_double);
+                    "delta_z = %f (double) for required_NF = %f (eval_NF = %f, "
+                    "spline_range=[%f,%f], "
+                    "isfinite=%d, isnan=%d, self_neq=%d, bitpattern=%d, raw_bits=0x%016llx)",
+                    delta_z_double, required_NF, eval_NF, spline_xmin, spline_xmax, is_finite_check,
+                    isnan_check, is_nan_self_neq, is_nan_bitpattern, *nan_check_ptr);
                 Throw(PhotonConsError);
             }
 
