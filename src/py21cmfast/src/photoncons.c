@@ -733,8 +733,29 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
 
     // Determine the neutral fraction (filling factor) of the analytic calibration expression given
     // the current sampled redshift
+    // Validate input redshift before calling Q_at_z
+    if (!isfinite(*redshift) || *redshift < 0.0) {
+        LOG_ERROR("adjust_redshifts_for_photoncons: Invalid input redshift = %f", *redshift);
+        Throw(PhotonConsError);
+    }
+
     Q_at_z(*redshift, &(temp));
+    if (!isfinite(temp)) {
+        LOG_ERROR(
+            "adjust_redshifts_for_photoncons: Q_at_z returned non-finite value = %e for redshift = "
+            "%f",
+            temp, *redshift);
+        Throw(PhotonConsError);
+    }
     required_NF = 1.0 - (float)temp;
+
+    // Validate required_NF
+    if (!isfinite(required_NF) || required_NF < 0.0 || required_NF > 1.0) {
+        LOG_ERROR(
+            "adjust_redshifts_for_photoncons: Invalid required_NF = %f (from Q = %e at z = %f)",
+            required_NF, temp, *redshift);
+        Throw(PhotonConsError);
+    }
 
     // Find which redshift we need to sample in order for the calibration reionisation history to
     // match the analytic expression
@@ -787,10 +808,33 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 while (check_required_NF < PhotonConsAsymptoteTo) {
                     temp_redshift = ((1. + temp_redshift) * z_step_factor - 1.);
 
+                    // Validate temp_redshift to prevent infinite loops or NaN propagation
+                    if (!isfinite(temp_redshift) || temp_redshift < 0.0 || temp_redshift > 1000.0) {
+                        LOG_ERROR(
+                            "adjust_redshifts_for_photoncons: temp_redshift became invalid = %f "
+                            "(new_counter = %d)",
+                            temp_redshift, new_counter);
+                        Throw(PhotonConsError);
+                    }
+
                     Q_at_z(temp_redshift, &(temp));
+                    if (!isfinite(temp)) {
+                        LOG_ERROR(
+                            "adjust_redshifts_for_photoncons: Q_at_z returned NaN for "
+                            "temp_redshift = %f",
+                            temp_redshift);
+                        Throw(PhotonConsError);
+                    }
                     check_required_NF = 1.0 - (float)temp;
 
                     new_counter += 1;
+                    // Safety check to prevent infinite loops
+                    if (new_counter > 1000) {
+                        LOG_ERROR(
+                            "adjust_redshifts_for_photoncons: Exceeded maximum iterations (1000) "
+                            "in while loop");
+                        Throw(PhotonConsError);
+                    }
                 }
 
                 // Now adjust the final delta_z by some amount to smooth if over successive steps
@@ -842,10 +886,33 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
             while (check_required_NF < NeutralFractions[0]) {
                 temp_redshift = ((1. + temp_redshift) * z_step_factor - 1.);
 
+                // Validate temp_redshift to prevent infinite loops or NaN propagation
+                if (!isfinite(temp_redshift) || temp_redshift < 0.0 || temp_redshift > 1000.0) {
+                    LOG_ERROR(
+                        "adjust_redshifts_for_photoncons: temp_redshift became invalid = %f "
+                        "(new_counter = %d)",
+                        temp_redshift, new_counter);
+                    Throw(PhotonConsError);
+                }
+
                 Q_at_z(temp_redshift, &(temp));
+                if (!isfinite(temp)) {
+                    LOG_ERROR(
+                        "adjust_redshifts_for_photoncons: Q_at_z returned NaN for temp_redshift = "
+                        "%f",
+                        temp_redshift);
+                    Throw(PhotonConsError);
+                }
                 check_required_NF = 1.0 - (float)temp;
 
                 new_counter += 1;
+                // Safety check to prevent infinite loops
+                if (new_counter > 1000) {
+                    LOG_ERROR(
+                        "adjust_redshifts_for_photoncons: Exceeded maximum iterations (1000) in "
+                        "while loop");
+                    Throw(PhotonConsError);
+                }
             }
             if (new_counter > 5) {
                 LOG_WARNING(
@@ -875,6 +942,15 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
         }
     }
 
+    // Validate adjusted_redshift before returning
+    if (!isfinite(adjusted_redshift) || adjusted_redshift < 0.0) {
+        LOG_ERROR(
+            "adjust_redshifts_for_photoncons: Final adjusted_redshift is invalid = %f (original = "
+            "%f, delta_z = %f)",
+            adjusted_redshift, *stored_redshift, *absolute_delta_z);
+        Throw(PhotonConsError);
+    }
+
     // keep the original sampled redshift
     *stored_redshift = *redshift;
 
@@ -886,12 +962,32 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
 void Q_at_z(double z, double *splined_value) {
     float returned_value;
 
+    // Validate input
+    if (!isfinite(z)) {
+        LOG_ERROR("Q_at_z: Invalid input redshift z = %e (not finite)", z);
+        *splined_value = NAN;
+        return;
+    }
+
     if (z >= Zmax) {
         *splined_value = 0.;
     } else if (z <= Zmin) {
         *splined_value = 1.;
     } else {
+        if (Q_at_z_spline == NULL || Q_at_z_spline_acc == NULL) {
+            LOG_ERROR("Q_at_z: Q_at_z_spline not initialized. Call InitialisePhotonCons first.");
+            *splined_value = NAN;
+            return;
+        }
         returned_value = gsl_spline_eval(Q_at_z_spline, z, Q_at_z_spline_acc);
+        if (!isfinite(returned_value)) {
+            LOG_ERROR(
+                "Q_at_z: gsl_spline_eval returned non-finite value = %e for z = %e (Zmin = %e, "
+                "Zmax = %e)",
+                returned_value, z, Zmin, Zmax);
+            *splined_value = NAN;
+            return;
+        }
         *splined_value = returned_value;
     }
 }

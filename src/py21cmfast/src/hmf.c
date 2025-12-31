@@ -538,6 +538,24 @@ double IntegratedNdM_QAG(double lnM_lo, double lnM_hi, struct parameters_gsl_MF_
     int w_size = 1000;
     gsl_integration_workspace *w = gsl_integration_workspace_alloc(w_size);
 
+    // Validate input parameters before attempting integration
+    if (!isfinite(params.redshift) || !isfinite(params.growthf)) {
+        LOG_ERROR("IntegratedNdM_QAG: Invalid input parameters - redshift=%.3e growthf=%.3e",
+                  params.redshift, params.growthf);
+        LOG_ERROR(
+            "This indicates a problem upstream - check redshift calculation and growth factor "
+            "computation.");
+        gsl_integration_workspace_free(w);
+        Throw(ValueError);
+    }
+
+    if (!isfinite(lnM_lo) || !isfinite(lnM_hi)) {
+        LOG_ERROR("IntegratedNdM_QAG: Invalid mass limits - lnM_lo=%.3e lnM_hi=%.3e", lnM_lo,
+                  lnM_hi);
+        gsl_integration_workspace_free(w);
+        Throw(ValueError);
+    }
+
     int status;
     F.function = integrand;
     F.params = &params;
@@ -565,6 +583,7 @@ double IntegratedNdM_QAG(double lnM_lo, double lnM_hi, struct parameters_gsl_MF_
                   params.l_x_norm, params.l_x_norm_mini);
         LOG_ERROR("Mturn_mcg %.3e Mturn_up %.3e gamma_type %d", params.Mturn_mcg,
                   params.Mturn_upper, params.gamma_type);
+        gsl_integration_workspace_free(w);
         CATCH_GSL_ERROR(status);
     }
 
