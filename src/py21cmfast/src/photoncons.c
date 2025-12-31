@@ -1039,22 +1039,45 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                 "adjust_redshifts_for_photoncons: Evaluating spline for required_NF = %f "
                 "(NeutralFractions[0] = %f)",
                 required_NF, NeutralFractions[0]);
-            *absolute_delta_z = gsl_spline_eval(deltaz_spline_for_photoncons, (double)required_NF,
-                                                deltaz_spline_for_photoncons_acc);
-            // Check for NaN/inf using explicit comparison since isfinite() may have type issues
-            // with float Use explicit NaN check: NaN != NaN is always true
-            double delta_z_double = (double)*absolute_delta_z;
-            int is_nan = (delta_z_double != delta_z_double);
-            int is_finite = isfinite(delta_z_double);
+            // Check the double result BEFORE storing in float to avoid NaN corruption
+            double delta_z_double =
+                gsl_spline_eval(deltaz_spline_for_photoncons, (double)required_NF,
+                                deltaz_spline_for_photoncons_acc);
+            // Check for NaN/inf using explicit comparison - check the double BEFORE float
+            // conversion
+            int is_nan_double = (delta_z_double != delta_z_double);
+            int is_finite_double = isfinite(delta_z_double);
+            int isnan_double = isnan(delta_z_double);
+
             LOG_DEBUG(
-                "adjust_redshifts_for_photoncons: Spline evaluation result: delta_z = %f, isfinite "
-                "= %d, isnan = %d, (delta_z != delta_z) = %d",
-                *absolute_delta_z, is_finite, isnan(delta_z_double), is_nan);
-            if (!is_finite || is_nan || isnan(delta_z_double)) {
+                "adjust_redshifts_for_photoncons: Spline evaluation result (double): delta_z = %f, "
+                "isfinite = %d, isnan = %d, (delta_z != delta_z) = %d",
+                delta_z_double, is_finite_double, isnan_double, is_nan_double);
+
+            if (!is_finite_double || is_nan_double || isnan_double) {
                 LOG_ERROR(
                     "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
-                    "delta_z = %f for required_NF = %f (isfinite=%d, isnan=%d, self_neq=%d)",
-                    *absolute_delta_z, required_NF, is_finite, isnan(delta_z_double), is_nan);
+                    "delta_z = %f (double) for required_NF = %f (isfinite=%d, isnan=%d, "
+                    "self_neq=%d)",
+                    delta_z_double, required_NF, is_finite_double, isnan_double, is_nan_double);
+                Throw(PhotonConsError);
+            }
+
+            // Now store in float and check again
+            *absolute_delta_z = (float)delta_z_double;
+            int is_nan_float = (*absolute_delta_z != *absolute_delta_z);
+            int is_finite_float = isfinite((double)*absolute_delta_z);
+            LOG_DEBUG(
+                "adjust_redshifts_for_photoncons: After float conversion: delta_z = %f (float), "
+                "isfinite = %d, isnan = %d, (delta_z != delta_z) = %d",
+                *absolute_delta_z, is_finite_float, isnan((double)*absolute_delta_z), is_nan_float);
+
+            if (!is_finite_float || is_nan_float || isnan((double)*absolute_delta_z)) {
+                LOG_ERROR(
+                    "adjust_redshifts_for_photoncons: Float conversion corrupted value: "
+                    "delta_z_double = %f, delta_z_float = %f (isfinite=%d, isnan=%d, self_neq=%d)",
+                    delta_z_double, *absolute_delta_z, is_finite_float,
+                    isnan((double)*absolute_delta_z), is_nan_float);
                 Throw(PhotonConsError);
             }
             adjusted_redshift = (*redshift) - (*absolute_delta_z);
