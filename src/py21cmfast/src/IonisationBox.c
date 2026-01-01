@@ -466,6 +466,20 @@ void calculate_mcrit_boxes(IonizedBox *prev_ionbox, TsBox *spin_temp, InitialCon
 // these form a lower limit on any grid cell
 void set_mean_fcoll(struct IonBoxConstants *c, IonizedBox *prev_box, IonizedBox *curr_box,
                     double mturn_acg, double mturn_mcg, double *f_limit_acg, double *f_limit_mcg) {
+    // Quick fix: Check if c->redshift is NaN and set to stored_redshift (original, delta_z = 0) as
+    // fallback
+    unsigned long long *c_rz_bits = (unsigned long long *)&(c->redshift);
+    int c_rz_is_nan = ((*c_rz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                       (*c_rz_bits & 0x000fffffffffffffULL) != 0);
+    if (c_rz_is_nan) {
+        LOG_WARNING(
+            "set_mean_fcoll: c->redshift = %f (bits=0x%016llx) is NaN. Setting to stored_redshift "
+            "= %f "
+            "as fallback (delta_z = 0, no photon conservation adjustment).",
+            c->redshift, *c_rz_bits, c->stored_redshift);
+        c->redshift = c->stored_redshift;  // Use stored (original) redshift, delta_z = 0
+    }
+
     double f_coll_curr = 0., f_coll_prev = 0., f_coll_curr_mini = 0., f_coll_prev_mini = 0.;
     ScalingConstants *sc_ptr = &(c->scale_consts);
     if (matter_options_global->SOURCE_MODEL > 0) {

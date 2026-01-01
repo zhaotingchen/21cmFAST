@@ -1465,6 +1465,21 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
         "%f)",
         *redshift, adjusted_redshift, *absolute_delta_z);
 
+    // Final check: Ensure adjusted_redshift is not NaN before assigning
+    unsigned long long *adj_rz_final_bits = (unsigned long long *)&adjusted_redshift;
+    int adj_rz_final_is_nan =
+        ((*adj_rz_final_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+         (*adj_rz_final_bits & 0x000fffffffffffffULL) != 0);
+    if (adj_rz_final_is_nan) {
+        LOG_WARNING(
+            "adjust_redshifts_for_photoncons: adjusted_redshift = %f (bits=0x%016llx) is NaN "
+            "before final assignment. Setting to original redshift = %f (delta_z = 0, no "
+            "adjustment).",
+            adjusted_redshift, *adj_rz_final_bits, *redshift);
+        adjusted_redshift = *redshift;
+        *absolute_delta_z = 0.0;
+    }
+
     // keep the original sampled redshift
     *stored_redshift = *redshift;
 
