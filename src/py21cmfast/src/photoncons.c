@@ -39,6 +39,7 @@ static float calibrated_NF_min;
 static double *deltaz, *deltaz_smoothed, *NeutralFractions, *z_Q, *Q_value, *nf_vals, *z_vals;
 static int N_NFsamples, N_extrapolated, N_analytic, N_calibrated, N_deltaz;
 static double FinalNF_Estimate, FirstNF_Estimate;
+static int photoncons_reached_full_ionization = 0;  // Flag: 1 if Q reached 1.0, 0 if stopped early
 
 static gsl_interp_accel *Q_at_z_spline_acc;
 static gsl_spline *Q_at_z_spline;
@@ -270,6 +271,31 @@ int InitialisePhotonCons() {
         }
         nbin = cnt - istart;
 
+        // Check if Q reached full ionization (1.0) or if integration stopped early due to a >=
+        // a_end The last stored Q value (before cnt decrement) is at Q_arr[cnt] (after decrement)
+        // If Q didn't reach 1.0, the integration likely stopped because a >= a_end
+        photoncons_reached_full_ionization = 0;
+        if (cnt >= istart && nbin > 0) {
+            // Check the maximum Q value that was stored (Q_arr[cnt] is the last valid index after
+            // decrement)
+            double max_Q_stored = Q_arr[cnt];
+            if (max_Q_stored >= 0.999) {
+                photoncons_reached_full_ionization = 1;
+                LOG_DEBUG(
+                    "InitialisePhotonCons: Q reached full ionization (Q = %.6f) before calibration "
+                    "end.",
+                    max_Q_stored);
+            } else {
+                LOG_WARNING(
+                    "InitialisePhotonCons: Integration stopped at Q = %.6f before reaching full "
+                    "ionization. "
+                    "This likely means a >= a_end (z <= PHOTONCONS_CALIBRATION_END = %.4f) was "
+                    "reached. "
+                    "Photon conservation adjustment will be disabled (deltaz = 0).",
+                    max_Q_stored, astro_params_global->PHOTONCONS_CALIBRATION_END);
+            }
+        }
+
         N_analytic = nbin;
 
         // initialise interploation Q as a function of z
@@ -463,6 +489,26 @@ void determine_deltaz_for_photoncons() {
     deltaz = calloc(N_NFsamples + N_extrapolated + 1, sizeof(double));
     deltaz_smoothed = calloc(N_NFsamples + N_extrapolated + 1, sizeof(double));
     NeutralFractions = calloc(N_NFsamples + N_extrapolated + 1, sizeof(double));
+
+    // Quick fix: If Q didn't reach full ionization, set all deltaz to 0 (no adjustment) and return
+    if (!photoncons_reached_full_ionization) {
+        LOG_WARNING(
+            "determine_deltaz_for_photoncons: Q did not reach full ionization during integration. "
+            "Setting all deltaz to 0 (no photon conservation adjustment).");
+
+        // Initialize arrays with zeros and proper NeutralFractions values
+        for (i = 0; i < N_NFsamples + N_extrapolated + 1; i++) {
+            deltaz[i] = 0.0;
+            deltaz_smoothed[i] = 0.0;
+            if (i < N_NFsamples) {
+                NeutralFractions[i] = NF_sample_min + bin_width * (float)i;
+            } else {
+                NeutralFractions[i] = 0.0;  // Extrapolated points
+            }
+        }
+
+        return;  // Early return - no need to compute deltaz
+    }
 
     // Go through and fill the data points (neutral fraction and corresponding delta z between the
     // calibrated and analytic curves).
