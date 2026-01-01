@@ -393,7 +393,13 @@ int ComputeZstart_PhotonCons(double *zstart) {
     double temp;
 
     Try {
-        if ((1. - PhotonConsStart) > Qmax) {
+        // Quick fix: If Q didn't reach full ionization, use fallback redshift
+        if (!photoncons_reached_full_ionization) {
+            LOG_DEBUG(
+                "ComputeZstart_PhotonCons: Q did not reach full ionization. Using fallback "
+                "redshift = 20.0");
+            temp = 20.0;
+        } else if ((1. - PhotonConsStart) > Qmax) {
             // It is possible that reionisation never even starts
             // Just need to arbitrarily set a high redshift to perform the algorithm
             temp = 20.;
@@ -490,11 +496,17 @@ void determine_deltaz_for_photoncons() {
     deltaz_smoothed = calloc(N_NFsamples + N_extrapolated + 1, sizeof(double));
     NeutralFractions = calloc(N_NFsamples + N_extrapolated + 1, sizeof(double));
 
-    // Quick fix: If Q didn't reach full ionization, set all deltaz to 0 (no adjustment) and return
+    // Note: We no longer need to check photoncons_reached_full_ionization here because
+    // adjust_redshifts_for_photoncons will skip the routine entirely if the flag is 0.
+    // However, we still need to initialize arrays to prevent segfaults if something else
+    // tries to access them. But actually, if the flag is 0, adjust_redshifts_for_photoncons
+    // returns early, so determine_deltaz_for_photoncons should never be called.
+    // So we can keep this check as a safety measure.
     if (!photoncons_reached_full_ionization) {
         LOG_WARNING(
             "determine_deltaz_for_photoncons: Q did not reach full ionization during integration. "
-            "Setting all deltaz to 0 (no photon conservation adjustment).");
+            "This function should not be called when photoncons_reached_full_ionization = 0. "
+            "Setting all deltaz to 0 as safety measure.");
 
         // Initialize arrays with zeros and proper NeutralFractions values
         for (i = 0; i < N_NFsamples + N_extrapolated + 1; i++) {
@@ -990,6 +1002,16 @@ void determine_deltaz_for_photoncons() {
 
 void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, float *stored_redshift,
                                      float *absolute_delta_z) {
+    // Quick fix: Skip entire photon conservation routine if Q didn't reach full ionization
+    if (!photoncons_reached_full_ionization) {
+        LOG_DEBUG(
+            "adjust_redshifts_for_photoncons: Q did not reach full ionization. Skipping photon "
+            "conservation adjustment (delta_z = 0).");
+        *stored_redshift = *redshift;
+        *absolute_delta_z = 0.0;
+        return;  // Early return - no adjustment
+    }
+
     int new_counter;
     double temp;
     float required_NF, adjusted_redshift, temp_redshift, check_required_NF;
