@@ -225,13 +225,22 @@ int InitialisePhotonCons() {
                     break;
                 }
 
+                // Check if Q1 >= 1.0 - if so, clamp to 1.0 and break (fully ionized)
+                if (Q1 >= 1.0) {
+                    Q1 = 1.0;  // Clamp to exactly 1.0 to avoid storing values > 1.0
+                    Q1_prev = Q1;
+                    z_arr[cnt] = zi;
+                    Q_arr[cnt] = Q1;
+                    cnt = cnt + 1;
+                    break;  // if fully ionized, stop here
+                }
+
                 Q1_prev = Q1;
 
                 z_arr[cnt] = zi;
                 Q_arr[cnt] = Q1;
 
                 cnt = cnt + 1;
-                if (Q1 >= 1.0) break;  // if fully ionized, stop here
                 //  As the Q value increases, the bin size decreases gradually because more accurate
                 //  calculation is required.
                 if (da < 7e-5)
