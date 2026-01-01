@@ -1350,13 +1350,82 @@ int ComputeIonizedBox(float redshift, float prev_redshift, PerturbedField *pertu
         float absolute_delta_z = 0.;
         float redshift_pc, stored_redshift_pc;
         if (astro_options_global->PHOTON_CONS_TYPE == 1) {
+            float original_redshift = redshift;  // Store original for fallback
             redshift_pc = redshift;
             adjust_redshifts_for_photoncons(simulation_options_global->ZPRIME_STEP_FACTOR,
                                             &redshift_pc, &stored_redshift_pc, &absolute_delta_z);
+
+            // Quick fix: Check if adjusted redshift is NaN and set to original redshift (delta_z =
+            // 0) as fallback
+            unsigned long long *rz_bits = (unsigned long long *)&redshift_pc;
+            int rz_is_nan = ((*rz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                             (*rz_bits & 0x000fffffffffffffULL) != 0);
+            if (rz_is_nan) {
+                LOG_WARNING(
+                    "IonisationBox: adjusted redshift_pc = %f (bits=0x%016llx) is NaN after "
+                    "adjust_redshifts_for_photoncons. Setting to original redshift = %f (delta_z = "
+                    "0, no adjustment).",
+                    redshift_pc, *rz_bits, original_redshift);
+                redshift_pc = original_redshift;
+                absolute_delta_z = 0.0;  // No adjustment applied
+            }
+
+            // Also check stored_redshift_pc
+            unsigned long long *stored_rz_bits = (unsigned long long *)&stored_redshift_pc;
+            int stored_rz_is_nan =
+                ((*stored_rz_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                 (*stored_rz_bits & 0x000fffffffffffffULL) != 0);
+            if (stored_rz_is_nan) {
+                LOG_WARNING(
+                    "IonisationBox: stored_redshift_pc = %f (bits=0x%016llx) is NaN after "
+                    "adjust_redshifts_for_photoncons. Setting to original redshift = %f as "
+                    "fallback.",
+                    stored_redshift_pc, *stored_rz_bits, original_redshift);
+                stored_redshift_pc = original_redshift;
+            }
+
             ionbox_constants.redshift = redshift_pc;
             ionbox_constants.stored_redshift = stored_redshift_pc;
-            ionbox_constants.photoncons_adjustment_factor =
-                dicke(redshift_pc) / dicke(stored_redshift_pc);
+
+            // Validate redshifts before computing dicke (growth factor)
+            if (!isfinite(redshift_pc) || !isfinite(stored_redshift_pc) ||
+                (redshift_pc != redshift_pc) || (stored_redshift_pc != stored_redshift_pc)) {
+                LOG_ERROR(
+                    "Updated photon non-conservation redshift is invalid: redshift_pc = %f, "
+                    "stored_redshift_pc = %f",
+                    redshift_pc, stored_redshift_pc);
+                LOG_ERROR(
+                    "This can sometimes occur when reionisation stalls (i.e. extremely low"
+                    "F_ESC or F_STAR or not enough sources)");
+                Throw(PhotonConsError);
+            }
+
+            double dicke_pc = dicke(redshift_pc);
+            double dicke_stored = dicke(stored_redshift_pc);
+
+            // Validate dicke results
+            if (!isfinite(dicke_pc) || !isfinite(dicke_stored) || (dicke_pc != dicke_pc) ||
+                (dicke_stored != dicke_stored)) {
+                LOG_ERROR(
+                    "dicke() returned invalid value: dicke(redshift_pc=%f) = %e, "
+                    "dicke(stored_redshift_pc=%f) = %e",
+                    redshift_pc, dicke_pc, stored_redshift_pc, dicke_stored);
+                Throw(PhotonConsError);
+            }
+
+            ionbox_constants.photoncons_adjustment_factor = dicke_pc / dicke_stored;
+
+            // Validate the adjustment factor
+            if (!isfinite(ionbox_constants.photoncons_adjustment_factor) ||
+                (ionbox_constants.photoncons_adjustment_factor !=
+                 ionbox_constants.photoncons_adjustment_factor)) {
+                LOG_ERROR(
+                    "photoncons_adjustment_factor is invalid: %e (from dicke_pc = %e / "
+                    "dicke_stored = %e)",
+                    ionbox_constants.photoncons_adjustment_factor, dicke_pc, dicke_stored);
+                Throw(PhotonConsError);
+            }
+
             // TODO: if we want this to work with minihalos we need to change prev_redshift too
             LOG_DEBUG("PhotonCons data:");
             LOG_DEBUG("original redshift=%f, updated redshift=%f delta-z = %f", stored_redshift_pc,

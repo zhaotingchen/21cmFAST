@@ -1315,6 +1315,14 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                     "adjust_redshifts_for_photoncons: Using boundary value at xmax = %f (eval_NF = "
                     "%f, diff = %e)",
                     spline_xmax, eval_NF, fabs(eval_NF - spline_xmax));
+                // Validate immediately after spline evaluation
+                if (!isfinite(delta_z_double) || (delta_z_double != delta_z_double)) {
+                    LOG_ERROR(
+                        "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
+                        "value = %e at boundary xmax = %f",
+                        delta_z_double, spline_xmax);
+                    Throw(PhotonConsError);
+                }
             } else if (fabs(eval_NF - spline_xmin) < boundary_tolerance) {
                 // Use the value at the minimum boundary directly
                 delta_z_double = gsl_spline_eval(deltaz_spline_for_photoncons, spline_xmin,
@@ -1323,10 +1331,26 @@ void adjust_redshifts_for_photoncons(double z_step_factor, float *redshift, floa
                     "adjust_redshifts_for_photoncons: Using boundary value at xmin = %f (eval_NF = "
                     "%f, diff = %e)",
                     spline_xmin, eval_NF, fabs(eval_NF - spline_xmin));
+                // Validate immediately after spline evaluation
+                if (!isfinite(delta_z_double) || (delta_z_double != delta_z_double)) {
+                    LOG_ERROR(
+                        "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
+                        "value = %e at boundary xmin = %f",
+                        delta_z_double, spline_xmin);
+                    Throw(PhotonConsError);
+                }
             } else {
                 // Normal evaluation
                 delta_z_double = gsl_spline_eval(deltaz_spline_for_photoncons, eval_NF,
                                                  deltaz_spline_for_photoncons_acc);
+                // Validate immediately after spline evaluation
+                if (!isfinite(delta_z_double) || (delta_z_double != delta_z_double)) {
+                    LOG_ERROR(
+                        "adjust_redshifts_for_photoncons: gsl_spline_eval returned non-finite "
+                        "value = %e for eval_NF = %f (spline_range=[%f,%f])",
+                        delta_z_double, eval_NF, spline_xmin, spline_xmax);
+                    Throw(PhotonConsError);
+                }
             }
 
             // Use multiple NaN detection methods - the value prints as "nan" but checks fail,
