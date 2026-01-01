@@ -1478,23 +1478,21 @@ void Q_at_z(double z, double *splined_value) {
             *splined_value = NAN;
             return;
         }
-        // Validate Q is within [0, 1] range (ionized fraction cannot exceed these bounds)
+        // Clamp Q to [0, 1] range to handle cubic spline overshoot
+        // Cubic splines can overshoot between data points even when all data is valid
         if (returned_value > 1.0) {
-            LOG_ERROR(
+            LOG_WARNING(
                 "Q_at_z: gsl_spline_eval returned Q = %e > 1.0 for z = %e (Zmin = %e, Zmax = %e). "
-                "Ionized fraction cannot exceed 1.0. This may indicate spline overshoot or invalid "
-                "data.",
+                "Clamping to 1.0 due to cubic spline overshoot.",
                 returned_value, z, Zmin, Zmax);
-            *splined_value = NAN;
-            Throw(PhotonConsError);
+            returned_value = 1.0;
         }
         if (returned_value < 0.0) {
-            LOG_ERROR(
+            LOG_WARNING(
                 "Q_at_z: gsl_spline_eval returned Q = %e < 0.0 for z = %e (Zmin = %e, Zmax = %e). "
-                "Ionized fraction cannot be negative.",
+                "Clamping to 0.0 due to cubic spline undershoot.",
                 returned_value, z, Zmin, Zmax);
-            *splined_value = NAN;
-            Throw(PhotonConsError);
+            returned_value = 0.0;
         }
         *splined_value = returned_value;
     }
