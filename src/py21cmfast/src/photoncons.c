@@ -35,7 +35,7 @@
 
 bool photon_cons_allocated = false;
 // These globals hold values relevant for the photon conservation (z-shift) model
-static float calibrated_NF_min;
+static float calibrated_NF_min, calibrated_NF_max;  // Range of NFHistory_spline
 static double *deltaz, *deltaz_smoothed, *NeutralFractions, *z_Q, *Q_value, *nf_vals, *z_vals;
 static int N_NFsamples, N_extrapolated, N_analytic, N_calibrated, N_deltaz;
 static double FinalNF_Estimate, FirstNF_Estimate;
@@ -546,19 +546,27 @@ void determine_deltaz_for_photoncons() {
             ((*z_analytic_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
              (*z_analytic_bits & 0x000fffffffffffffULL) != 0);
 
-        if (z_cal_is_nan) {
-            LOG_ERROR(
-                "determine_deltaz_for_photoncons: z_at_NFHist returned NaN z_cal = %f "
-                "(bits=0x%016llx) "
-                "for NF_sample = %f (i = %d)",
-                z_cal, *z_cal_bits, NF_sample, i);
-        }
-        if (z_analytic_is_nan) {
-            LOG_ERROR(
-                "determine_deltaz_for_photoncons: z_at_Q returned NaN z_analytic = %f "
-                "(bits=0x%016llx) "
-                "for NF_sample = %f (i = %d)",
-                z_analytic, *z_analytic_bits, NF_sample, i);
+        // If either z_cal or z_analytic is NaN, skip this point (set deltaz = 0, no adjustment)
+        if (z_cal_is_nan || z_analytic_is_nan) {
+            if (z_cal_is_nan) {
+                LOG_WARNING(
+                    "determine_deltaz_for_photoncons: z_at_NFHist returned NaN z_cal = %f "
+                    "(bits=0x%016llx) "
+                    "for NF_sample = %f (i = %d). NF_sample may be outside spline range [%f, %f]. "
+                    "Setting deltaz = 0.0 (no adjustment).",
+                    z_cal, *z_cal_bits, NF_sample, i, calibrated_NF_min, calibrated_NF_max);
+            }
+            if (z_analytic_is_nan) {
+                LOG_WARNING(
+                    "determine_deltaz_for_photoncons: z_at_Q returned NaN z_analytic = %f "
+                    "(bits=0x%016llx) "
+                    "for NF_sample = %f (i = %d, Q = %f). Q may be outside spline range [%f, %f]. "
+                    "Setting deltaz = 0.0 (no adjustment).",
+                    z_analytic, *z_analytic_bits, NF_sample, i, 1.0 - NF_sample, Qmin, Qmax);
+            }
+            deltaz[i + 1 + N_extrapolated] = 0.0;  // No adjustment when inputs are invalid
+            NeutralFractions[i + 1 + N_extrapolated] = NF_sample;
+            continue;  // Skip to next iteration
         }
 
         deltaz[i + 1 + N_extrapolated] = fabs(z_cal - z_analytic);
@@ -816,6 +824,35 @@ void determine_deltaz_for_photoncons() {
             // Determine redshift given a neutral fraction for the analytic curve
             z_at_Q(1. - NF_sample, &(temp));
             z_analytic = temp;
+
+            // Validate z_cal and z_analytic for NaN before computing deltaz
+            unsigned long long *z_cal_bits_2 = (unsigned long long *)&z_cal;
+            unsigned long long *z_analytic_bits_2 = (unsigned long long *)&z_analytic;
+            int z_cal_is_nan_2 =
+                ((*z_cal_bits_2 & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                 (*z_cal_bits_2 & 0x000fffffffffffffULL) != 0);
+            int z_analytic_is_nan_2 =
+                ((*z_analytic_bits_2 & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                 (*z_analytic_bits_2 & 0x000fffffffffffffULL) != 0);
+
+            // If either is NaN, skip this point (set deltaz = 0, no adjustment)
+            if (z_cal_is_nan_2 || z_analytic_is_nan_2) {
+                if (z_cal_is_nan_2) {
+                    LOG_WARNING(
+                        "determine_deltaz_for_photoncons: z_at_NFHist returned NaN z_cal for "
+                        "NF_sample = %f in smoothing loop. Setting deltaz = 0.0 (no adjustment).",
+                        NF_sample);
+                }
+                if (z_analytic_is_nan_2) {
+                    LOG_WARNING(
+                        "determine_deltaz_for_photoncons: z_at_Q returned NaN z_analytic for "
+                        "NF_sample = %f (Q = %f) in smoothing loop. Setting deltaz = 0.0 (no "
+                        "adjustment).",
+                        NF_sample, 1.0 - NF_sample);
+                }
+                deltaz[i + 1] = 0.0;  // No adjustment when inputs are invalid
+                continue;             // Skip to next iteration in while loop
+            }
 
             // Determine the delta z
             val2 = fabs(z_cal - z_analytic);
@@ -1665,6 +1702,7 @@ void initialise_NFHistory_spline(double *redshifts, double *NF_estimate, int NSp
     z_vals = calloc((counter + 1), sizeof(double));
 
     calibrated_NF_min = 1.;
+    calibrated_NF_max = 0.;
 
     // Store the data, and determine the end point of the input data for estimating the extrapolated
     // results
@@ -1681,6 +1719,9 @@ void initialise_NFHistory_spline(double *redshifts, double *NF_estimate, int NSp
 
         if (nf_vals[i] < calibrated_NF_min) {
             calibrated_NF_min = nf_vals[i];
+        }
+        if (nf_vals[i] > calibrated_NF_max) {
+            calibrated_NF_max = nf_vals[i];
         }
     }
 
@@ -1711,7 +1752,30 @@ void z_at_NFHist(double xHI_Hist, double *splined_value) {
         Throw(PhotonConsError);
     }
 
+    // Check if input is within spline range to prevent NaN from gsl_spline_eval
+    // The spline x-axis is nf_vals, which ranges from calibrated_NF_min to calibrated_NF_max
+    if (xHI_Hist < calibrated_NF_min || xHI_Hist > calibrated_NF_max) {
+        LOG_WARNING(
+            "z_at_NFHist: xHI_Hist = %f is outside spline range [%f, %f]. "
+            "gsl_spline_eval would return NaN. Returning NaN to caller.",
+            xHI_Hist, calibrated_NF_min, calibrated_NF_max);
+        *splined_value = NAN;
+        return;
+    }
+
     returned_value = gsl_spline_eval(NFHistory_spline, xHI_Hist, NFHistory_spline_acc);
+
+    // Validate result for NaN (in case of other issues like invalid spline data)
+    unsigned long long *ret_bits = (unsigned long long *)&returned_value;
+    int ret_is_nan = ((*ret_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                      (*ret_bits & 0x000fffffffffffffULL) != 0);
+    if (ret_is_nan) {
+        LOG_WARNING(
+            "z_at_NFHist: gsl_spline_eval returned NaN for xHI_Hist = %f (within range [%f, %f]). "
+            "This may indicate invalid spline data or numerical issues.",
+            xHI_Hist, calibrated_NF_min, calibrated_NF_max);
+    }
+
     *splined_value = returned_value;
 }
 
