@@ -1688,10 +1688,24 @@ void z_at_Q(double Q, double *splined_value) {
 }
 
 void free_Q_value() {
-    gsl_spline_free(Q_at_z_spline);
-    gsl_interp_accel_free(Q_at_z_spline_acc);
-    gsl_spline_free(z_at_Q_spline);
-    gsl_interp_accel_free(z_at_Q_spline_acc);
+    // Free Q splines (used by both z-photoncon and alpha-photoncon)
+    // Check for NULL to avoid segfault if not initialized
+    if (Q_at_z_spline != NULL) {
+        gsl_spline_free(Q_at_z_spline);
+        Q_at_z_spline = NULL;
+    }
+    if (Q_at_z_spline_acc != NULL) {
+        gsl_interp_accel_free(Q_at_z_spline_acc);
+        Q_at_z_spline_acc = NULL;
+    }
+    if (z_at_Q_spline != NULL) {
+        gsl_spline_free(z_at_Q_spline);
+        z_at_Q_spline = NULL;
+    }
+    if (z_at_Q_spline_acc != NULL) {
+        gsl_interp_accel_free(z_at_Q_spline_acc);
+        z_at_Q_spline_acc = NULL;
+    }
 }
 
 void initialise_NFHistory_spline(double *redshifts, double *NF_estimate, int NSpline) {
@@ -1847,22 +1861,68 @@ int ObtainPhotonConsData(double *z_at_Q_data, double *Q_data, int *Ndata_analyti
 
 void FreePhotonConsMemory() {
     LOG_DEBUG("Freeing some photon cons memory.");
-    free(deltaz);
-    free(deltaz_smoothed);
-    free(NeutralFractions);
-    free(z_Q);
-    free(Q_value);
-    free(nf_vals);
-    free(z_vals);
 
+    // Free arrays (check for NULL to avoid double-free)
+    if (deltaz != NULL) {
+        free(deltaz);
+        deltaz = NULL;
+    }
+    if (deltaz_smoothed != NULL) {
+        free(deltaz_smoothed);
+        deltaz_smoothed = NULL;
+    }
+    if (NeutralFractions != NULL) {
+        free(NeutralFractions);
+        NeutralFractions = NULL;
+    }
+    if (z_Q != NULL) {
+        free(z_Q);
+        z_Q = NULL;
+    }
+    if (Q_value != NULL) {
+        free(Q_value);
+        Q_value = NULL;
+    }
+    if (nf_vals != NULL) {
+        free(nf_vals);
+        nf_vals = NULL;
+    }
+    if (z_vals != NULL) {
+        free(z_vals);
+        z_vals = NULL;
+    }
+
+    // Free Q splines (used by both z-photoncon and alpha-photoncon)
     free_Q_value();
 
-    gsl_spline_free(NFHistory_spline);
-    gsl_interp_accel_free(NFHistory_spline_acc);
-    gsl_spline_free(z_NFHistory_spline);
-    gsl_interp_accel_free(z_NFHistory_spline_acc);
-    gsl_spline_free(deltaz_spline_for_photoncons);
-    gsl_interp_accel_free(deltaz_spline_for_photoncons_acc);
+    // Free NFHistory splines (only used by z-photoncon, may be NULL for alpha-photoncon)
+    if (NFHistory_spline != NULL) {
+        gsl_spline_free(NFHistory_spline);
+        NFHistory_spline = NULL;
+    }
+    if (NFHistory_spline_acc != NULL) {
+        gsl_interp_accel_free(NFHistory_spline_acc);
+        NFHistory_spline_acc = NULL;
+    }
+    if (z_NFHistory_spline != NULL) {
+        gsl_spline_free(z_NFHistory_spline);
+        z_NFHistory_spline = NULL;
+    }
+    if (z_NFHistory_spline_acc != NULL) {
+        gsl_interp_accel_free(z_NFHistory_spline_acc);
+        z_NFHistory_spline_acc = NULL;
+    }
+
+    // Free deltaz spline (only used by z-photoncon, may be NULL for alpha-photoncon)
+    if (deltaz_spline_for_photoncons != NULL) {
+        gsl_spline_free(deltaz_spline_for_photoncons);
+        deltaz_spline_for_photoncons = NULL;
+    }
+    if (deltaz_spline_for_photoncons_acc != NULL) {
+        gsl_interp_accel_free(deltaz_spline_for_photoncons_acc);
+        deltaz_spline_for_photoncons_acc = NULL;
+    }
+
     LOG_DEBUG("Done Freeing photon cons memory.");
 
     photon_cons_allocated = false;
