@@ -1603,43 +1603,67 @@ void Q_at_z(double z, double *splined_value) {
         return;
     }
 
+    // Check if spline is initialized
+    if (Q_at_z_spline == NULL || Q_at_z_spline_acc == NULL) {
+        LOG_ERROR("Q_at_z: Q_at_z_spline not initialized. Call InitialisePhotonCons first.");
+        *splined_value = NAN;
+        return;
+    }
+
+    // Handle out-of-range cases explicitly to avoid gsl_spline_eval returning NaN
     if (z >= Zmax) {
         *splined_value = 0.;
-    } else if (z <= Zmin) {
-        *splined_value = 1.;
-    } else {
-        if (Q_at_z_spline == NULL || Q_at_z_spline_acc == NULL) {
-            LOG_ERROR("Q_at_z: Q_at_z_spline not initialized. Call InitialisePhotonCons first.");
-            *splined_value = NAN;
-            return;
-        }
-        returned_value = gsl_spline_eval(Q_at_z_spline, z, Q_at_z_spline_acc);
-        if (!isfinite(returned_value)) {
-            LOG_ERROR(
-                "Q_at_z: gsl_spline_eval returned non-finite value = %e for z = %e (Zmin = %e, "
-                "Zmax = %e)",
-                returned_value, z, Zmin, Zmax);
-            *splined_value = NAN;
-            return;
-        }
-        // Clamp Q to [0, 1] range to handle cubic spline overshoot
-        // Cubic splines can overshoot between data points even when all data is valid
-        if (returned_value > 1.0) {
-            LOG_WARNING(
-                "Q_at_z: gsl_spline_eval returned Q = %e > 1.0 for z = %e (Zmin = %e, Zmax = %e). "
-                "Clamping to 1.0 due to cubic spline overshoot.",
-                returned_value, z, Zmin, Zmax);
-            returned_value = 1.0;
-        }
-        if (returned_value < 0.0) {
-            LOG_WARNING(
-                "Q_at_z: gsl_spline_eval returned Q = %e < 0.0 for z = %e (Zmin = %e, Zmax = %e). "
-                "Clamping to 0.0 due to cubic spline undershoot.",
-                returned_value, z, Zmin, Zmax);
-            returned_value = 0.0;
-        }
-        *splined_value = returned_value;
+        return;
     }
+    if (z <= Zmin) {
+        *splined_value = 1.;
+        return;
+    }
+
+    // Validate z is within spline range (should be true at this point, but double-check)
+    if (z < Zmin || z > Zmax) {
+        LOG_WARNING(
+            "Q_at_z: z = %e is outside spline range [%e, %e]. This should not happen. "
+            "Returning NaN.",
+            z, Zmin, Zmax);
+        *splined_value = NAN;
+        return;
+    }
+
+    // Evaluate spline (z is within range)
+    returned_value = gsl_spline_eval(Q_at_z_spline, z, Q_at_z_spline_acc);
+
+    // Validate result for NaN/Inf (gsl_spline_eval can return NaN even within range if spline data
+    // is invalid)
+    unsigned long long *ret_bits = (unsigned long long *)&returned_value;
+    int ret_is_nan = ((*ret_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                      (*ret_bits & 0x000fffffffffffffULL) != 0);
+    if (ret_is_nan || !isfinite(returned_value)) {
+        LOG_WARNING(
+            "Q_at_z: gsl_spline_eval returned non-finite value = %e (bits=0x%016llx) for z = %e "
+            "(within range [%e, %e]). This may indicate invalid spline data.",
+            returned_value, ret_is_nan ? *ret_bits : 0ULL, z, Zmin, Zmax);
+        *splined_value = NAN;
+        return;
+    }
+
+    // Clamp Q to [0, 1] range to handle cubic spline overshoot
+    // Cubic splines can overshoot between data points even when all data is valid
+    if (returned_value > 1.0) {
+        LOG_WARNING(
+            "Q_at_z: gsl_spline_eval returned Q = %e > 1.0 for z = %e (Zmin = %e, Zmax = %e). "
+            "Clamping to 1.0 due to cubic spline overshoot.",
+            returned_value, z, Zmin, Zmax);
+        returned_value = 1.0;
+    }
+    if (returned_value < 0.0) {
+        LOG_WARNING(
+            "Q_at_z: gsl_spline_eval returned Q = %e < 0.0 for z = %e (Zmin = %e, Zmax = %e). "
+            "Clamping to 0.0 due to cubic spline undershoot.",
+            returned_value, z, Zmin, Zmax);
+        returned_value = 0.0;
+    }
+    *splined_value = returned_value;
 }
 
 void z_at_Q(double Q, double *splined_value) {
@@ -1857,9 +1881,56 @@ void set_alphacons_params(double yint, double slope) {
 // counterpart in Python
 double get_fesc_fit(double redshift) {
     double Q, fesc_fit;
+
+    // Validate input redshift
+    if (!isfinite(redshift) || redshift < 0.0) {
+        LOG_WARNING(
+            "get_fesc_fit: Invalid input redshift = %e (not finite or negative). "
+            "Returning fallback value = fesc_photoncons_yint = %e (Q = 0.0).",
+            redshift, fesc_photoncons_yint);
+        return fesc_photoncons_yint;  // Return yint (Q=0 case) as fallback
+    }
+
     Q_at_z(redshift, &Q);
-    if (Q > 1.) Q = 1.;
+
+    // Check if Q is NaN or invalid
+    unsigned long long *Q_bits = (unsigned long long *)&Q;
+    int Q_is_nan = ((*Q_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                    (*Q_bits & 0x000fffffffffffffULL) != 0);
+    if (Q_is_nan || !isfinite(Q)) {
+        LOG_WARNING(
+            "get_fesc_fit: Q_at_z returned non-finite Q = %e (bits=0x%016llx) for redshift = %e. "
+            "Using fallback: Q = 0.0, fesc_fit = fesc_photoncons_yint = %e.",
+            Q, Q_is_nan ? *Q_bits : 0ULL, redshift, fesc_photoncons_yint);
+        Q = 0.0;  // Use Q = 0.0 as fallback (corresponds to early universe, no ionization)
+    }
+
+    // Clamp Q to [0, 1] range
+    if (Q > 1.) {
+        LOG_WARNING("get_fesc_fit: Q = %e > 1.0 for redshift = %e. Clamping to 1.0.", Q, redshift);
+        Q = 1.;
+    }
+    if (Q < 0.) {
+        LOG_WARNING("get_fesc_fit: Q = %e < 0.0 for redshift = %e. Clamping to 0.0.", Q, redshift);
+        Q = 0.;
+    }
+
     fesc_fit = fesc_photoncons_yint + Q * fesc_photoncons_slope;
+
+    // Validate final result
+    unsigned long long *fesc_bits = (unsigned long long *)&fesc_fit;
+    int fesc_is_nan = ((*fesc_bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL &&
+                       (*fesc_bits & 0x000fffffffffffffULL) != 0);
+    if (fesc_is_nan || !isfinite(fesc_fit)) {
+        LOG_WARNING(
+            "get_fesc_fit: Computed fesc_fit = %e (bits=0x%016llx) is non-finite for redshift = %e "
+            "(Q = %e, yint = %e, slope = %e). Using fallback: fesc_fit = fesc_photoncons_yint = "
+            "%e.",
+            fesc_fit, fesc_is_nan ? *fesc_bits : 0ULL, redshift, Q, fesc_photoncons_yint,
+            fesc_photoncons_slope, fesc_photoncons_yint);
+        fesc_fit = fesc_photoncons_yint;  // Return yint as fallback
+    }
+
     LOG_DEBUG(
         "photon cons fit activated z = %.2f Q = %.2f, fit (yint, slope) = (%.2f, %.2f), val = %.2f",
         redshift, Q, fesc_photoncons_yint, fesc_photoncons_slope, fesc_fit);
